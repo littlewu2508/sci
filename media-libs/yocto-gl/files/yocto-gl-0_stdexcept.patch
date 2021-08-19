@@ -1,0 +1,12 @@
+diff --git a/yocto/yocto_img.cpp b/yocto/yocto_img.cpp
+index dad2e5a..938ef91 100644
+--- a/yocto/yocto_img.cpp
++++ b/yocto/yocto_img.cpp
+@@ -29,6 +29,7 @@
+ #include "yocto_img.h"
+ 
+ #include <cmath>
++#include <stdexcept>
+ 
+ #ifndef YIMG_NO_STBIMAGE
+ 
