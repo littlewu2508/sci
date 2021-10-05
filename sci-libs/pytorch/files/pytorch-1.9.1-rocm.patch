@@ -1,0 +1,1809 @@
+rebase https://github.com/ROCmSoftwarePlatform/pytorch/tree/rocm4.3_torch_hip_version (0576bcbd2b864cb9ace85a37aad16fbddae8ec75)
+to https://github.com/pytorch/pytorch/releases/tag/v1.9.1 (dfbd030854359207cb3040b864614affeace11ce) 
+(with a minor mannual conflict resolving at 4951768a4460b0a6147460304cdabfefc181420b) -> 4951768a4460b0a6147460304cdabfefc181420b
+
+This patch is diff between dfbd030854359207cb3040b864614affeace11ce (tag v1.9.1) and 4951768a4460b0a6147460304cdabfefc181420b
+
+diff --git a/.circleci/docker/common/install_rocm.sh b/.circleci/docker/common/install_rocm.sh
+index 062a306841..793256a5ed 100644
+--- a/.circleci/docker/common/install_rocm.sh
++++ b/.circleci/docker/common/install_rocm.sh
+@@ -4,27 +4,27 @@ set -ex
+ 
+ install_magma() {
+     # "install" hipMAGMA into /opt/rocm/magma by copying after build
+-    git clone https://bitbucket.org/icl/magma.git
++    git clone https://bitbucket.org/icl/magma.git -b magma_ctrl_launch_bounds
+     pushd magma
+-    git checkout 878b1ce02e9cfe4a829be22c8f911e9c0b6bd88f
++    # The branch "magma_ctrl_launch_bounds" is having a fix over the below commit, so keeping the below comment for reference.
++    #git checkout 878b1ce02e9cfe4a829be22c8f911e9c0b6bd88f
++    # Work around non-asii characters in certain magma sources; remove this after upstream magma fixes this.
++    perl -i.bak -pe 's/[^[:ascii:]]//g' sparse/control/magma_zfree.cpp
++    perl -i.bak -pe 's/[^[:ascii:]]//g' sparse/control/magma_zsolverinfo.cpp
+     cp make.inc-examples/make.inc.hip-gcc-mkl make.inc
+     echo 'LIBDIR += -L$(MKLROOT)/lib' >> make.inc
+     echo 'LIB += -Wl,--enable-new-dtags -Wl,--rpath,/opt/rocm/lib -Wl,--rpath,$(MKLROOT)/lib -Wl,--rpath,/opt/rocm/magma/lib' >> make.inc
+-    echo 'DEVCCFLAGS += --amdgpu-target=gfx803 --amdgpu-target=gfx900 --amdgpu-target=gfx906 --amdgpu-target=gfx908 --gpu-max-threads-per-block=256' >> make.inc
++    echo 'DEVCCFLAGS += --amdgpu-target=gfx900 --amdgpu-target=gfx906 --amdgpu-target=gfx908 --amdgpu-target=gfx90a --amdgpu-target=gfx1030 --gpu-max-threads-per-block=256' >> make.inc
+     # hipcc with openmp flag may cause isnan() on __device__ not to be found; depending on context, compiler may attempt to match with host definition
+     sed -i 's/^FOPENMP/#FOPENMP/g' make.inc
+     export PATH="${PATH}:/opt/rocm/bin"
+     make -f make.gen.hipMAGMA -j $(nproc)
+-    LANG=C.UTF-8 make lib/libmagma.so -j $(nproc) MKLROOT=/opt/conda
++    make lib/libmagma.so -j $(nproc) MKLROOT=/opt/conda
+     make testing/testing_dgemm -j $(nproc) MKLROOT=/opt/conda
+     popd
+     mv magma /opt/rocm
+ }
+ 
+-ver() {
+-    printf "%3d%03d%03d%03d" $(echo "$1" | tr '.' ' ');
+-}
+-
+ install_ubuntu() {
+     apt-get update
+     if [[ $UBUNTU_VERSION == 18.04 ]]; then
+@@ -38,14 +38,9 @@ install_ubuntu() {
+     apt-get install -y libc++1
+     apt-get install -y libc++abi1
+ 
+-    ROCM_REPO="ubuntu"
+-    if [[ $(ver $ROCM_VERSION) -lt $(ver 4.2) ]]; then
+-        ROCM_REPO="xenial"
+-    fi
+-
+     # Add rocm repository
+     wget -qO - http://repo.radeon.com/rocm/rocm.gpg.key | apt-key add -
+-    echo "deb [arch=amd64] http://repo.radeon.com/rocm/apt/${ROCM_VERSION} ${ROCM_REPO} main" > /etc/apt/sources.list.d/rocm.list
++    echo "deb [arch=amd64] http://repo.radeon.com/rocm/apt/${ROCM_VERSION} xenial main" > /etc/apt/sources.list.d/rocm.list
+     apt-get update --allow-insecure-repositories
+ 
+     DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-unauthenticated \
+diff --git a/.github/workflows/ifu.yml b/.github/workflows/ifu.yml
+new file mode 100644
+index 0000000000..2d229f7efa
+--- /dev/null
++++ b/.github/workflows/ifu.yml
+@@ -0,0 +1,37 @@
++name: IntegrateFromUpstream
++on:
++  schedule:
++    # verified via crontab.guru website. “At 01:00 on Monday.”
++    - cron: '0 1 * * 1'
++  workflow_dispatch:
++    inputs:
++      message:
++        description: 'Reason for manual trigger'
++        required: false
++        default: 'refresh master'
++jobs:
++  IntegrateFromUpstream:
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v2
++        with:
++          fetch-depth: 0
++      - name: Get Current Date
++        id: date
++        run: echo "::set-output name=date::$(date +'%Y-%m-%d')"
++      - name: Fetch and Merge
++        run: |
++          echo "Reason for trigger: ${{ github.event.inputs.message }}"
++          echo "Actor for trigger: ${{ github.event.actor }}"
++          git config user.name github-actions
++          git config user.email github-actions@github.com
++          git remote add upstream https://github.com/pytorch/pytorch
++          git fetch upstream master
++          git merge upstream/master 
++      - name: Create Pull Request
++        uses: peter-evans/create-pull-request@v3
++        with:
++          branch: IFU-master-${{ steps.date.outputs.date }}
++          title: IFU-master-${{ steps.date.outputs.date }}
++          assignees: jeffdaily
++          reviewers: jeffdaily
+diff --git a/.github/workflows/ifu_testing.yml b/.github/workflows/ifu_testing.yml
+new file mode 100644
+index 0000000000..83e6acfd13
+--- /dev/null
++++ b/.github/workflows/ifu_testing.yml
+@@ -0,0 +1,30 @@
++name: IntegrateFromUpstream_internal_testing_branch
++on:
++  schedule:
++    # verified via crontab.guru website. “At 01:00 on Monday.”
++    - cron: '0 1 * * 1'
++jobs:
++  IntegrateFromUpstream_internal_testing_branch:
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v2
++        with:
++          fetch-depth: 0
++      - name: Get Current Date
++        id: date
++        run: echo "::set-output name=date::$(date +'%Y-%m-%d')"
++      - name: Fetch and Merge
++        run: |
++          git checkout rocm3.10_internal_testing
++          git config user.name github-actions
++          git config user.email github-actions@github.com
++          git remote add upstream https://github.com/pytorch/pytorch
++          git fetch upstream master
++          git merge upstream/master 
++      - name: Create Pull Request
++        uses: peter-evans/create-pull-request@v3
++        with:
++          branch: IFU-rocm3-10-${{ steps.date.outputs.date }}
++          title: IFU-rocm3-10-${{ steps.date.outputs.date }}
++          assignees: jeffdaily
++          reviewers: jeffdaily
+diff --git a/aten/src/ATen/TensorIterator.cpp b/aten/src/ATen/TensorIterator.cpp
+index 4a9993bf92..9773f6e0b1 100644
+--- a/aten/src/ATen/TensorIterator.cpp
++++ b/aten/src/ATen/TensorIterator.cpp
+@@ -642,7 +642,7 @@ void TensorIteratorBase::for_each(loop2d_t loop, int64_t grain_size) {
+   int64_t numel = this->numel();
+   if (numel == 0) {
+     return;
+-  } else if (numel < grain_size || at::get_num_threads() == 1) {
++  } else if (numel < internal::GRAIN_SIZE || at::get_num_threads() == 1) {
+     return serial_for_each(loop, {0, numel});
+   } else {
+     at::parallel_for(0, numel, grain_size, [&](int64_t begin, int64_t end) {
+diff --git a/aten/src/ATen/cuda/CUDABlas.cpp b/aten/src/ATen/cuda/CUDABlas.cpp
+index 654f8537c6..844a9c24fe 100644
+--- a/aten/src/ATen/cuda/CUDABlas.cpp
++++ b/aten/src/ATen/cuda/CUDABlas.cpp
+@@ -373,7 +373,7 @@ void gemm<float>(CUDABLAS_GEMM_ARGTYPES(float)) {
+       handle, opa, opb, m, n, k, &alpha, a, lda, b, ldb, &beta, c, ldc));
+ }
+ 
+-#if !defined(__HIP_PLATFORM_HCC__) || (defined(__HIP_PLATFORM_HCC__) && HIP_VERSION >= 210)
++#if !defined(__HIP_PLATFORM_HCC__) || (defined(__HIP_PLATFORM_HCC__) && TORCH_HIP_VERSION >= 210)
+   template <>
+   void gemm<c10::complex<double>>(CUDABLAS_GEMM_ARGTYPES(c10::complex<double>)) {
+     // See Note [Writing Nondeterministic Operations]
+@@ -390,7 +390,7 @@ void gemm<float>(CUDABLAS_GEMM_ARGTYPES(float)) {
+   }
+ #endif
+ 
+-#if !defined(__HIP_PLATFORM_HCC__) || (defined(__HIP_PLATFORM_HCC__) && HIP_VERSION >= 210)
++#if !defined(__HIP_PLATFORM_HCC__) || (defined(__HIP_PLATFORM_HCC__) && TORCH_HIP_VERSION >= 210)
+   template <>
+   void gemm<c10::complex<float>>(CUDABLAS_GEMM_ARGTYPES(c10::complex<float>)) {
+     // See Note [Writing Nondeterministic Operations]
+@@ -703,7 +703,7 @@ void trsmBatched<c10::complex<double>>(
+     CUDABLAS_POSINT_CHECK(gemv<Dtype>, incy); \
+   } while (0)
+ 
+-#if !defined(__HIP_PLATFORM_HCC__) || (defined(__HIP_PLATFORM_HCC__) && HIP_VERSION >= 210)
++#if !defined(__HIP_PLATFORM_HCC__) || (defined(__HIP_PLATFORM_HCC__) && TORCH_HIP_VERSION >= 210)
+   template <>
+   void gemv<c10::complex<double>>(CUDABLAS_GEMV_ARGTYPES(c10::complex<double>)) {
+     // See Note [Writing Nondeterministic Operations]
+@@ -719,7 +719,7 @@ void trsmBatched<c10::complex<double>>(
+   }
+ #endif
+ 
+-#if !defined(__HIP_PLATFORM_HCC__) || (defined(__HIP_PLATFORM_HCC__) && HIP_VERSION >= 210)
++#if !defined(__HIP_PLATFORM_HCC__) || (defined(__HIP_PLATFORM_HCC__) && TORCH_HIP_VERSION >= 210)
+ template <>
+ void gemv<c10::complex<float>>(CUDABLAS_GEMV_ARGTYPES(c10::complex<float>)) {
+   // gemv is bw bound, and does not benefit from TF32. But the precision
+@@ -852,7 +852,7 @@ void dot<at::Half>(CUDABLAS_DOT_ARGTYPES(at::Half)) {
+       result,
+       CUDA_R_16F,
+       CUDA_R_32F));
+-#elif HIP_VERSION >= 210
++#elif TORCH_HIP_VERSION >= 210
+   TORCH_CUDABLAS_CHECK(rocblas_hdot(
+       handle,
+       n,
+diff --git a/aten/src/ATen/cuda/CUDABlas.h b/aten/src/ATen/cuda/CUDABlas.h
+index f579c4f7e8..510dfaba9e 100644
+--- a/aten/src/ATen/cuda/CUDABlas.h
++++ b/aten/src/ATen/cuda/CUDABlas.h
+@@ -54,11 +54,11 @@ template <>
+ void gemm<double>(CUDABLAS_GEMM_ARGTYPES(double));
+ template <>
+ void gemm<float>(CUDABLAS_GEMM_ARGTYPES(float));
+-#if !defined(__HIP_PLATFORM_HCC__) || (defined(__HIP_PLATFORM_HCC__) && HIP_VERSION >= 210)
++#if !defined(__HIP_PLATFORM_HCC__) || (defined(__HIP_PLATFORM_HCC__) && TORCH_HIP_VERSION >= 210)
+   template <>
+   void gemm<c10::complex<double>>(CUDABLAS_GEMM_ARGTYPES(c10::complex<double>));
+ #endif
+-#if !defined(__HIP_PLATFORM_HCC__) || (defined(__HIP_PLATFORM_HCC__) && HIP_VERSION >= 210)
++#if !defined(__HIP_PLATFORM_HCC__) || (defined(__HIP_PLATFORM_HCC__) && TORCH_HIP_VERSION >= 210)
+   template <>
+   void gemm<c10::complex<float>>(CUDABLAS_GEMM_ARGTYPES(c10::complex<float>));
+ #endif
+@@ -152,7 +152,7 @@ template <>
+ void gemv<double>(CUDABLAS_GEMV_ARGTYPES(double));
+ template <>
+ void gemv<float>(CUDABLAS_GEMV_ARGTYPES(float));
+-#if !defined(__HIP_PLATFORM_HCC__) || (defined(__HIP_PLATFORM_HCC__) && HIP_VERSION >= 210)
++#if !defined(__HIP_PLATFORM_HCC__) || (defined(__HIP_PLATFORM_HCC__) && TORCH_HIP_VERSION >= 210)
+ template <>
+ void gemv<c10::complex<double>>(CUDABLAS_GEMV_ARGTYPES(c10::complex<double>));
+ template <>
+diff --git a/aten/src/ATen/cuda/CublasHandlePool.cpp b/aten/src/ATen/cuda/CublasHandlePool.cpp
+index effe86fd64..806e88654a 100644
+--- a/aten/src/ATen/cuda/CublasHandlePool.cpp
++++ b/aten/src/ATen/cuda/CublasHandlePool.cpp
+@@ -51,7 +51,7 @@ cublasHandle_t getCurrentCUDABlasHandle() {
+     TORCH_CUDABLAS_CHECK(cublasSetMathMode(handle, CUBLAS_DEFAULT_MATH));
+   }
+ #endif
+-#if defined(__HIP_PLATFORM_HCC__) && HIP_VERSION >= 308
++#if defined(__HIP_PLATFORM_HCC__) && TORCH_HIP_VERSION >= 308
+   rocblas_atomics_mode rocblas_mode;
+   if (at::globalContext().deterministicAlgorithms()) {
+     rocblas_mode = rocblas_atomics_not_allowed;
+diff --git a/aten/src/ATen/cuda/nvrtc_stub/ATenNVRTC.h b/aten/src/ATen/cuda/nvrtc_stub/ATenNVRTC.h
+index 147eeef109..6c28c29800 100644
+--- a/aten/src/ATen/cuda/nvrtc_stub/ATenNVRTC.h
++++ b/aten/src/ATen/cuda/nvrtc_stub/ATenNVRTC.h
+@@ -83,7 +83,7 @@ namespace at { namespace cuda {
+ //
+ // HIP from ROCm 3.5 on renamed hipOccupancyMaxActiveBlocksPerMultiprocessor
+ // to hipModuleOccupancyMaxActiveBlocksPerMultiprocessor.
+-#if HIP_VERSION < 305
++#if TORCH_HIP_VERSION < 305
+ #define HIPOCCUPANCYMAXACTIVEBLOCKSPERMULTIPROCESSOR hipOccupancyMaxActiveBlocksPerMultiprocessor
+ #else
+ #define HIPOCCUPANCYMAXACTIVEBLOCKSPERMULTIPROCESSOR cuOccupancyMaxActiveBlocksPerMultiprocessor
+diff --git a/aten/src/ATen/native/cuda/AdaptiveAveragePooling.cu b/aten/src/ATen/native/cuda/AdaptiveAveragePooling.cu
+index 5066480535..f1f8b93c42 100644
+--- a/aten/src/ATen/native/cuda/AdaptiveAveragePooling.cu
++++ b/aten/src/ATen/native/cuda/AdaptiveAveragePooling.cu
+@@ -200,7 +200,7 @@ namespace {
+         for(ih = 0; ih < kH; ++ih) {
+           for(iw = 0; iw < kW; ++iw) {
+             // atomic add since different threads could update same variable
+-            gpuAtomicAdd(&(ptr_gradInput[iw]), grad_delta);
++            gpuAtomicAddNoReturn(&(ptr_gradInput[iw]), grad_delta);
+           }
+           ptr_gradInput += isizeW; // next input line
+         }
+diff --git a/aten/src/ATen/native/cuda/AdaptiveAveragePooling3d.cu b/aten/src/ATen/native/cuda/AdaptiveAveragePooling3d.cu
+index 21d8d2cdf1..f2bf6a07f5 100644
+--- a/aten/src/ATen/native/cuda/AdaptiveAveragePooling3d.cu
++++ b/aten/src/ATen/native/cuda/AdaptiveAveragePooling3d.cu
+@@ -291,7 +291,7 @@ __global__ void atomicadaptiveaveragegradinput(
+       for (it = 0; it < kT; ++it) {
+         for (ih = 0; ih < kH; ++ih) {
+           for (iw = 0; iw < kW; ++iw) {
+-            gpuAtomicAdd(&(ptr_gradInput[ih*isizeW + iw]), grad_delta);
++            gpuAtomicAddNoReturn(&(ptr_gradInput[ih*isizeW + iw]), grad_delta);
+           }
+         }
+         ptr_gradInput += isizeH*isizeW; // next input frame
+diff --git a/aten/src/ATen/native/cuda/AdaptiveMaxPooling2d.cu b/aten/src/ATen/native/cuda/AdaptiveMaxPooling2d.cu
+index 4adcccf211..6731b29b21 100644
+--- a/aten/src/ATen/native/cuda/AdaptiveMaxPooling2d.cu
++++ b/aten/src/ATen/native/cuda/AdaptiveMaxPooling2d.cu
+@@ -185,7 +185,7 @@ __global__ void atomicadaptivemaxgradinput(
+       int argmax = (*ptr_ind);
+ 
+       // atomic add since different threads could update same variable
+-      gpuAtomicAdd(&(gradInput[argmax]), z);
++      gpuAtomicAddNoReturn(&(gradInput[argmax]), z);
+     }
+   }
+ }
+diff --git a/aten/src/ATen/native/cuda/AdaptiveMaxPooling3d.cu b/aten/src/ATen/native/cuda/AdaptiveMaxPooling3d.cu
+index d53e15a641..3c5c6c4105 100644
+--- a/aten/src/ATen/native/cuda/AdaptiveMaxPooling3d.cu
++++ b/aten/src/ATen/native/cuda/AdaptiveMaxPooling3d.cu
+@@ -262,7 +262,7 @@ __global__ void atomicadaptivemaxgradinput(
+       int64_t *ptr_ind = indices_dt + oh*osizeW + ow;
+       T grad_delta = *ptr_gradOutput;
+       int64_t argmax = (*ptr_ind);
+-      gpuAtomicAdd(&(gradInput_d[argmax]), grad_delta);
++      gpuAtomicAddNoReturn(&(gradInput_d[argmax]), grad_delta);
+     }
+   }
+ }
+diff --git a/aten/src/ATen/native/cuda/AveragePool3d.cu b/aten/src/ATen/native/cuda/AveragePool3d.cu
+index bd81169457..d8840d5b95 100644
+--- a/aten/src/ATen/native/cuda/AveragePool3d.cu
++++ b/aten/src/ATen/native/cuda/AveragePool3d.cu
+@@ -253,7 +253,7 @@ __global__ void avg_pool3d_cuda_update_grad_input_atomic(
+       {
+         for (int iCol = wstart; iCol < wend; ++iCol)
+         {
+-          gpuAtomicAdd(&gradInput[slice][iFrame][iRow][iCol], val);
++          gpuAtomicAddNoReturn(&gradInput[slice][iFrame][iRow][iCol], val);
+         }
+       }
+     }
+diff --git a/aten/src/ATen/native/cuda/CUDAScalar.cu b/aten/src/ATen/native/cuda/CUDAScalar.cu
+index e06ef78c45..24085f5731 100644
+--- a/aten/src/ATen/native/cuda/CUDAScalar.cu
++++ b/aten/src/ATen/native/cuda/CUDAScalar.cu
+@@ -13,7 +13,7 @@ namespace native {
+ 
+ Scalar _local_scalar_dense_cuda(const Tensor& self) {
+   Scalar r;
+-#if HIP_VERSION >= 301
++#if TORCH_HIP_VERSION >= 301
+   AT_DISPATCH_ALL_TYPES_AND_COMPLEX_AND3(
+     at::ScalarType::Half, at::ScalarType::Bool, at::ScalarType::BFloat16, self.scalar_type(), "_local_scalar_dense_cuda", [&] {
+         scalar_t value;
+diff --git a/aten/src/ATen/native/cuda/Copy.cu b/aten/src/ATen/native/cuda/Copy.cu
+index 49564ff5a9..21cc135bb3 100644
+--- a/aten/src/ATen/native/cuda/Copy.cu
++++ b/aten/src/ATen/native/cuda/Copy.cu
+@@ -194,7 +194,7 @@ static void copy_kernel_cuda(TensorIterator& iter, bool non_blocking) {
+     void* ptr = (dst_device == kCPU ? dst : src);
+     AT_CUDA_CHECK(THCCachingHostAllocator_recordEvent(ptr, stream));
+   } else {
+-#if HIP_VERSION >= 301
++#if TORCH_HIP_VERSION >= 301
+     AT_CUDA_CHECK(hipMemcpyWithStream(dst, src, nbytes, kind, stream));
+ #else
+     AT_CUDA_CHECK(cudaMemcpyAsync(dst, src, nbytes, kind, stream));
+diff --git a/aten/src/ATen/native/cuda/DilatedMaxPool3d.cu b/aten/src/ATen/native/cuda/DilatedMaxPool3d.cu
+index 693415b6d4..2c8bc061d9 100644
+--- a/aten/src/ATen/native/cuda/DilatedMaxPool3d.cu
++++ b/aten/src/ATen/native/cuda/DilatedMaxPool3d.cu
+@@ -142,7 +142,7 @@ __global__ static void max_pool3d_with_indices_backward_single_out_frame(
+   {
+     int maxIndex = indices[slice][oFrame][oRow][oColumn];
+     if (maxIndex != -1) {
+-      gpuAtomicAdd(&gradInputData[slice * itime * iheight * iwidth + maxIndex],
++      gpuAtomicAddNoReturn(&gradInputData[slice * itime * iheight * iwidth + maxIndex],
+                 gradOutput[slice][oFrame][oRow][oColumn]);
+     }
+   }
+diff --git a/aten/src/ATen/native/cuda/EmbeddingBag.cu b/aten/src/ATen/native/cuda/EmbeddingBag.cu
+index e74e8576f7..af5ba8a058 100644
+--- a/aten/src/ATen/native/cuda/EmbeddingBag.cu
++++ b/aten/src/ATen/native/cuda/EmbeddingBag.cu
+@@ -252,7 +252,7 @@ __global__ void EmbeddingBag_accGradParametersKernel_max(
+       index_t word_idx = max_indices[bag * stride + featureDim];
+       if (word_idx >= 0 && word_idx != padding_idx) {
+         // If bag is empty, we have max_indices[idx] set to -1 in forward.
+-        gpuAtomicAdd(&(gradWeight[word_idx * stride + featureDim]),
++        gpuAtomicAddNoReturn(&(gradWeight[word_idx * stride + featureDim]),
+                 gradOutput[bag * stride + featureDim]);
+       }
+     }
+diff --git a/aten/src/ATen/native/cuda/FractionalMaxPool2d.cu b/aten/src/ATen/native/cuda/FractionalMaxPool2d.cu
+index 485ae4836e..00ee2a541e 100644
+--- a/aten/src/ATen/native/cuda/FractionalMaxPool2d.cu
++++ b/aten/src/ATen/native/cuda/FractionalMaxPool2d.cu
+@@ -114,7 +114,7 @@ __global__ void fractional_max_pool2d_backward_out_cuda_frame(
+     int inputH = index / gradInput.size(3);
+     assert(inputH < gradInput.size(2));
+ 
+-    gpuAtomicAdd(
++    gpuAtomicAddNoReturn(
+       &gradInput[batch][plane][inputH][inputW],
+       gradOutput[batch][plane][outputH][outputW]
+     );
+diff --git a/aten/src/ATen/native/cuda/FractionalMaxPool3d.cu b/aten/src/ATen/native/cuda/FractionalMaxPool3d.cu
+index dac336ec09..eda9a8c1a9 100644
+--- a/aten/src/ATen/native/cuda/FractionalMaxPool3d.cu
++++ b/aten/src/ATen/native/cuda/FractionalMaxPool3d.cu
+@@ -134,7 +134,7 @@ __global__ void fractional_max_pool3d_backward_out_frame(
+       gradInput.size(4));
+     assert(inputT < gradInput.size(2));
+ 
+-    gpuAtomicAdd(
++    gpuAtomicAddNoReturn(
+       &gradInput[batch][plane][inputT][inputH][inputW],
+       gradOutput[batch][plane][outputT][outputH][outputW]
+       );
+diff --git a/aten/src/ATen/native/cuda/Indexing.cu b/aten/src/ATen/native/cuda/Indexing.cu
+index 97ee47cf13..07bf20b08e 100644
+--- a/aten/src/ATen/native/cuda/Indexing.cu
++++ b/aten/src/ATen/native/cuda/Indexing.cu
+@@ -369,7 +369,7 @@ __global__ void indexAddSmallIndex(cuda::detail::TensorInfo<T, IndexType> dst,
+           cuda::detail::IndexToOffset<T, IndexType, SrcDim>::get(linearIndex, src);
+       srcOffset += srcIndex * src.strides[srcAddDim];
+ 
+-      gpuAtomicAdd(&dst.data[dstOffset], src.data[srcOffset] * alpha);
++      gpuAtomicAddNoReturn(&dst.data[dstOffset], src.data[srcOffset] * alpha);
+     }
+   }
+ }
+@@ -419,7 +419,7 @@ __global__ void indexAddLargeIndex(cuda::detail::TensorInfo<T, IndexType> dst,
+       cuda::detail::IndexToOffset<T, IndexType, SrcDim>::get(elementInSlice, src);
+     srcOffset += srcIndex * src.strides[srcAddDim];
+ 
+-    gpuAtomicAdd(&dst.data[dstOffset], src.data[srcOffset] * alpha);
++    gpuAtomicAddNoReturn(&dst.data[dstOffset], src.data[srcOffset] * alpha);
+   }
+ }
+ 
+diff --git a/aten/src/ATen/native/cuda/KernelUtils.cuh b/aten/src/ATen/native/cuda/KernelUtils.cuh
+index cdf2f39f11..3a3d556707 100644
+--- a/aten/src/ATen/native/cuda/KernelUtils.cuh
++++ b/aten/src/ATen/native/cuda/KernelUtils.cuh
+@@ -17,7 +17,7 @@ __device__ __forceinline__ void fastSpecializedAtomicAdd(
+ #if (                         \
+     (CUDA_VERSION < 10000) || \
+     (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ < 700)))
+-  gpuAtomicAdd(
++  gpuAtomicAddNoReturn(
+       reinterpret_cast<at::Half*>(tensor) + index,
+       static_cast<at::Half>(value));
+ #else
+@@ -53,7 +53,7 @@ __device__ __forceinline__ void fastSpecializedAtomicAdd(
+     size_t index,
+     const size_t numel,
+     scalar_t value) {
+-  gpuAtomicAdd(tensor + index, value);
++  gpuAtomicAddNoReturn(tensor + index, value);
+ }
+ 
+ template <class scalar_t>
+@@ -66,7 +66,7 @@ __device__ __forceinline__ void fastAtomicAdd(
+   if (fast_atomics) {
+     fastSpecializedAtomicAdd(tensor, index, numel, value);
+   } else {
+-    gpuAtomicAdd(tensor + index, value);
++    gpuAtomicAddNoReturn(tensor + index, value);
+   }
+ }
+ 
+diff --git a/aten/src/ATen/native/cuda/LossCTC.cu b/aten/src/ATen/native/cuda/LossCTC.cu
+index 69718b206d..f84bf369a0 100644
+--- a/aten/src/ATen/native/cuda/LossCTC.cu
++++ b/aten/src/ATen/native/cuda/LossCTC.cu
+@@ -455,7 +455,7 @@ ctc_loss_backward_collect_nonblank_gpu_kernel(scalar_t* __restrict__ gradient_da
+ 
+   for (int64_t t = 0; t < input_length; t++) {
+     scalar_t lp = log_probs_data[lp_batch_offset + t * lp_input_stride + lp_char_stride * target];
+-    gpuAtomicAdd(&gradient_data[gr_batch_offset + t * gr_input_stride + gr_char_stride * target],
++    gpuAtomicAddNoReturn(&gradient_data[gr_batch_offset + t * gr_input_stride + gr_char_stride * target],
+               -std::exp(log_alpha_data[la_batch_offset + la_input_stride * t + la_target_stride * (s*2+1)]
+                         + log_beta_data[lb_batch_offset + lb_input_stride * t + lb_target_stride * (s*2+1)]
+                         + nll - lp) * gr);
+diff --git a/aten/src/ATen/native/cuda/ReflectionPad.cu b/aten/src/ATen/native/cuda/ReflectionPad.cu
+index 0dadbc47ae..2867a34bb8 100644
+--- a/aten/src/ATen/native/cuda/ReflectionPad.cu
++++ b/aten/src/ATen/native/cuda/ReflectionPad.cu
+@@ -101,7 +101,7 @@ __global__ void reflection_pad1d_backward_out_kernel(
+ 
+   if (output_x < output_w) {
+     auto index_pair = get_index_mapping1d(input_w, output_w, output_x, pad_l);
+-    gpuAtomicAdd(
++    gpuAtomicAddNoReturn(
+       &grad_input[index_pair.first], grad_output[index_pair.second]);
+   }
+ }
+@@ -142,7 +142,7 @@ __global__ void reflection_pad2d_backward_out_kernel(
+       pad_l, pad_t,
+       output_xy, y_shift, z_shift, nplane);
+ 
+-    gpuAtomicAdd(&grad_input[index_pair.first], grad_output[index_pair.second]);
++    gpuAtomicAddNoReturn(&grad_input[index_pair.first], grad_output[index_pair.second]);
+   }
+ }
+ 
+diff --git a/aten/src/ATen/native/cuda/ReplicationPadding.cu b/aten/src/ATen/native/cuda/ReplicationPadding.cu
+index 71e21c3ea2..ec0421a774 100644
+--- a/aten/src/ATen/native/cuda/ReplicationPadding.cu
++++ b/aten/src/ATen/native/cuda/ReplicationPadding.cu
+@@ -69,7 +69,7 @@ __global__ void replication_pad_backward_kernel(
+   int inputPointX = imin(imax(padL, outputPointX), gradInput.size(2) + padL - 1) - oStartX + iStartX;
+ 
+   scalar_t valueToCopy = gradOutput[batch][plane][outputPointX];
+-  gpuAtomicAdd(&gradInput[batch][plane][inputPointX], valueToCopy);
++  gpuAtomicAddNoReturn(&gradInput[batch][plane][inputPointX], valueToCopy);
+ }
+ 
+ template <typename scalar_t>
+@@ -123,7 +123,7 @@ __global__ void replication_pad_backward_kernel(
+   int inputPointY = imin(imax(padT, outputPointY), gradInput.size(2) + padT - 1) - oStartY + iStartY;
+ 
+   scalar_t valueToCopy = gradOutput[batch][plane][outputPointY][outputPointX];
+-  gpuAtomicAdd(&gradInput[batch][plane][inputPointY][inputPointX], valueToCopy);
++  gpuAtomicAddNoReturn(&gradInput[batch][plane][inputPointY][inputPointX], valueToCopy);
+ }
+ 
+ template <typename scalar_t>
+@@ -197,7 +197,7 @@ __global__ void replication_pad_backward_kernel(
+ 
+   scalar_t valueToCopy =
+     gradOutput[batch][plane][outputPointZ][outputPointY][outputPointX];
+-  gpuAtomicAdd(&gradInput[batch][plane][inputPointZ][inputPointY][inputPointX],
++  gpuAtomicAddNoReturn(&gradInput[batch][plane][inputPointZ][inputPointY][inputPointX],
+       valueToCopy);
+ }
+ 
+diff --git a/aten/src/ATen/native/cuda/ScatterGatherKernel.cu b/aten/src/ATen/native/cuda/ScatterGatherKernel.cu
+index 8cbb43f2ae..9b5b24f925 100644
+--- a/aten/src/ATen/native/cuda/ScatterGatherKernel.cu
++++ b/aten/src/ATen/native/cuda/ScatterGatherKernel.cu
+@@ -29,7 +29,7 @@ class ReduceAdd {
+ public:
+   template <typename scalar_t>
+   constexpr C10_DEVICE void operator() (scalar_t * self_data, const scalar_t * src_data) const {
+-    gpuAtomicAdd(self_data, *src_data);
++    gpuAtomicAddNoReturn(self_data, *src_data);
+   }
+ };
+ static ReduceAdd reduce_add;
+diff --git a/aten/src/ATen/native/cuda/SoftMax.cu b/aten/src/ATen/native/cuda/SoftMax.cu
+index c972b7c1e4..1499517e32 100644
+--- a/aten/src/ATen/native/cuda/SoftMax.cu
++++ b/aten/src/ATen/native/cuda/SoftMax.cu
+@@ -127,7 +127,7 @@ void SpatialSoftMax_getLaunchSizes(
+   uint32_t block_threads = block.x * block.y;
+   smem_size = block.x == 1 ? 0 : block_threads * sizeof(accscalar_t);
+   int max_active_blocks;
+-#if defined(__HIP_PLATFORM_HCC__) && HIP_VERSION < 305
++#if defined(__HIP_PLATFORM_HCC__) && TORCH_HIP_VERSION < 305
+   // HIP function signature is not compatible yet.
+   uint32_t max_blocks;
+   cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks,
+diff --git a/aten/src/ATen/native/cuda/Sorting.cu b/aten/src/ATen/native/cuda/Sorting.cu
+index 22c3de828e..a7e54f3ddd 100644
+--- a/aten/src/ATen/native/cuda/Sorting.cu
++++ b/aten/src/ATen/native/cuda/Sorting.cu
+@@ -136,7 +136,7 @@ __global__ void gatherMedian(
+   }
+   __syncthreads();
+   if (nan_count > 0) {
+-    atomicAdd(&num_nan, nan_count);
++    gpuAtomicAddNoReturn(&num_nan, nan_count);
+   }
+   __syncthreads();
+ 
+diff --git a/aten/src/ATen/native/cuda/SortingRadixSelect.cuh b/aten/src/ATen/native/cuda/SortingRadixSelect.cuh
+index 982309303c..f7f6b50742 100644
+--- a/aten/src/ATen/native/cuda/SortingRadixSelect.cuh
++++ b/aten/src/ATen/native/cuda/SortingRadixSelect.cuh
+@@ -219,7 +219,7 @@ __device__ void countRadixUsingMask(
+   if (getLaneId() == 0) {
+ #pragma unroll
+     for (uint32_t i = 0; i < RadixSize; ++i) {
+-      gpuAtomicAdd(&smem[i], counts[i]);
++      gpuAtomicAddNoReturn(&smem[i], counts[i]);
+     }
+   }
+ 
+diff --git a/aten/src/ATen/native/cuda/SummaryOps.cu b/aten/src/ATen/native/cuda/SummaryOps.cu
+index 7dfc9e8dec..880029a9f3 100644
+--- a/aten/src/ATen/native/cuda/SummaryOps.cu
++++ b/aten/src/ATen/native/cuda/SummaryOps.cu
+@@ -73,7 +73,7 @@ __global__ void kernelHistogram1D(
+       if (bVal >= minvalue && bVal <= maxvalue) {
+         // Use value at `b` as an offset of `smem`
+         const IndexType bin = getBin<input_t, IndexType>(bVal, minvalue, maxvalue, nbins);
+-        gpuAtomicAdd(&smem[bin], getOp(linearIndex));
++        gpuAtomicAddNoReturn(&smem[bin], getOp(linearIndex));
+       }
+     }
+     __syncthreads();
+@@ -83,7 +83,7 @@ __global__ void kernelHistogram1D(
+     for (IndexType i = threadIdx.x; i < a.sizes[0]; i += blockDim.x) {
+       const IndexType aOffset =
+           detail::IndexToOffset<output_t, IndexType, ADims>::get(i, a);
+-      gpuAtomicAdd(&a.data[aOffset], smem[i]);
++      gpuAtomicAddNoReturn(&a.data[aOffset], smem[i]);
+     }
+ 
+   } else if (MemoryType == CUDAHistogramMemoryType::MULTI_BLOCK) {
+@@ -102,7 +102,7 @@ __global__ void kernelHistogram1D(
+         const IndexType pIdx = p.strides[0] * blockIdx.x + bin;
+         const IndexType pOffset =
+             detail::IndexToOffset<output_t, IndexType, PDims>::get(pIdx, p);
+-        gpuAtomicAdd(&p.data[pOffset], getOp(linearIndex));
++        gpuAtomicAddNoReturn(&p.data[pOffset], getOp(linearIndex));
+       }
+     }
+     __syncthreads();
+@@ -115,7 +115,7 @@ __global__ void kernelHistogram1D(
+     for (IndexType i = threadIdx.x; i < a.sizes[0]; i += blockDim.x) {
+       const IndexType aOffset =
+           detail::IndexToOffset<output_t, IndexType, ADims>::get(i, a);
+-      gpuAtomicAdd(&a.data[aOffset], p.data[pOffset + i]);
++      gpuAtomicAddNoReturn(&a.data[aOffset], p.data[pOffset + i]);
+     }
+ 
+   } else {
+@@ -132,7 +132,7 @@ __global__ void kernelHistogram1D(
+         const IndexType bin = getBin<input_t, IndexType>(bVal, minvalue, maxvalue, nbins);
+         const IndexType aOffset =
+             detail::IndexToOffset<output_t, IndexType, ADims>::get(bin, a);
+-        gpuAtomicAdd(&a.data[aOffset], getOp(linearIndex));
++        gpuAtomicAddNoReturn(&a.data[aOffset], getOp(linearIndex));
+       }
+     }
+   }
+diff --git a/aten/src/ATen/native/cuda/UpSample.cuh b/aten/src/ATen/native/cuda/UpSample.cuh
+index 4df5031a6d..71443e1975 100644
+--- a/aten/src/ATen/native/cuda/UpSample.cuh
++++ b/aten/src/ATen/native/cuda/UpSample.cuh
+@@ -171,7 +171,7 @@ __device__ __forceinline__ static void upsample_increment_value_bounded(
+   /* TODO: result here is truncated to scalar_t,
+      check: https://github.com/pytorch/pytorch/pull/19630#discussion_r281426912
+    */
+-  gpuAtomicAdd(
++  gpuAtomicAddNoReturn(
+       &data[batch][channel][access_y][access_x], static_cast<scalar_t>(value));
+ }
+ 
+diff --git a/aten/src/ATen/native/cuda/UpSampleLinear1d.cu b/aten/src/ATen/native/cuda/UpSampleLinear1d.cu
+index f0c6ed5d33..6b47f7bd32 100644
+--- a/aten/src/ATen/native/cuda/UpSampleLinear1d.cu
++++ b/aten/src/ATen/native/cuda/UpSampleLinear1d.cu
+@@ -100,8 +100,8 @@ __global__ void upsample_linear1d_out_frame_backward(
+     for (int n = 0; n < batchsize; n++) {
+       for (int c = 0; c < channels; ++c) {
+         const scalar_t d2val = odata[n][c][w2];
+-        gpuAtomicAdd(&idata[n][c][w1], static_cast<scalar_t>(w0lambda * d2val));
+-        gpuAtomicAdd(
++        gpuAtomicAddNoReturn(&idata[n][c][w1], static_cast<scalar_t>(w0lambda * d2val));
++        gpuAtomicAddNoReturn(
+             &idata[n][c][w1 + w1p], static_cast<scalar_t>(w1lambda * d2val));
+       }
+     }
+diff --git a/aten/src/THC/THCAtomics.cuh b/aten/src/THC/THCAtomics.cuh
+index 314451136f..db913c6fe2 100644
+--- a/aten/src/THC/THCAtomics.cuh
++++ b/aten/src/THC/THCAtomics.cuh
+@@ -281,6 +281,32 @@ static inline __device__ void atomicAdd(bool *address, bool val) {
+   gpuAtomicAdd(address, val);
+ }
+ 
++/* Note [explicitly non-returning atomics]
++ * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
++ * AMD's MI100 (gfx908) provides an optimized fp32 atomicAdd, exposed via atomicAddNoRet().
++ * Due to compiler limitations, callers must opt-in to guarantee the optimized instruction.
++ * This non-returning atomicAddNoRet cannot be used to implement the returning atomicAdd,
++ * therefore we need a new API 'gpuAtomicAddNoReturn'.
++ */
++template<typename T>
++static inline __device__ void gpuAtomicAddNoReturn(c10::complex<T> *address, c10::complex<T> val) { gpuAtomicAdd(address, val); }
++static inline __device__ void gpuAtomicAddNoReturn(uint8_t *address, uint8_t val) { gpuAtomicAdd(address, val); }
++static inline __device__ void gpuAtomicAddNoReturn(int8_t *address, int8_t val) { gpuAtomicAdd(address, val); }
++static inline __device__ void gpuAtomicAddNoReturn(int16_t *address, int16_t val) { gpuAtomicAdd(address, val); }
++static inline __device__ void gpuAtomicAddNoReturn(int32_t *address, int32_t val) { gpuAtomicAdd(address, val); }
++static inline __device__ void gpuAtomicAddNoReturn(int64_t *address, int64_t val) { gpuAtomicAdd(address, val); }
++static inline __device__ void gpuAtomicAddNoReturn(bool *address, bool val) { gpuAtomicAdd(address, val); }
++static inline __device__ void gpuAtomicAddNoReturn(at::Half *address, at::Half val) { gpuAtomicAdd(address, val); }
++static inline __device__ void gpuAtomicAddNoReturn(at::BFloat16 *address, at::BFloat16 val) { gpuAtomicAdd(address, val); }
++static inline __device__ void gpuAtomicAddNoReturn(double *address, double val) { gpuAtomicAdd(address, val); }
++
++/* Special case fp32 atomic. */
++#if defined(__HIP_PLATFORM_HCC__) && defined(__gfx908__)
++static inline __device__ void gpuAtomicAddNoReturn(float *address, float val) { atomicAddNoRet(address, val); }
++#else
++static inline __device__ void gpuAtomicAddNoReturn(float *address, float val) { gpuAtomicAdd(address, val); }
++#endif
++
+ // Atomic multiplication implementation.
+ 
+ inline __device__ at::Half gpuAtomicMul(at::Half * address, at::Half val) {
+diff --git a/aten/src/THC/generic/THCStorage.cpp b/aten/src/THC/generic/THCStorage.cpp
+index 650103b3d3..02d19ef40b 100644
+--- a/aten/src/THC/generic/THCStorage.cpp
++++ b/aten/src/THC/generic/THCStorage.cpp
+@@ -26,7 +26,7 @@ void THCStorage_(set)(THCState *state, THCStorage *self, ptrdiff_t index, scalar
+       2,
+       "index out of bounds");
+   cudaStream_t stream = c10::cuda::getCurrentCUDAStream();
+-#if HIP_VERSION >= 301
++#if TORCH_HIP_VERSION >= 301
+   THCudaCheck(hipMemcpyWithStream(THCStorage_(data)(state, self) + index, &value, sizeof(scalar_t),
+                                   cudaMemcpyHostToDevice,
+                                   stream));
+@@ -46,7 +46,7 @@ scalar_t THCStorage_(get)(THCState *state, const THCStorage *self, ptrdiff_t ind
+       "index out of bounds");
+   scalar_t value;
+   cudaStream_t stream = c10::cuda::getCurrentCUDAStream();
+-#if HIP_VERSION >= 301
++#if TORCH_HIP_VERSION >= 301
+   THCudaCheck(hipMemcpyWithStream(&value, THCStorage_(data)(state, self) + index, sizeof(scalar_t),
+                                   cudaMemcpyDeviceToHost, stream));
+ #else
+diff --git a/aten/src/THC/generic/THCStorageCopy.cpp b/aten/src/THC/generic/THCStorageCopy.cpp
+index 1411e30fd2..ce0f1606ae 100644
+--- a/aten/src/THC/generic/THCStorageCopy.cpp
++++ b/aten/src/THC/generic/THCStorageCopy.cpp
+@@ -10,7 +10,7 @@ void THCStorage_(copyCPU)(THCState *state, THCStorage *self, struct THStorage *s
+ {
+   THArgCheck(self->nbytes() == src->nbytes(), 2, "size does not match");
+   cudaStream_t stream = c10::cuda::getCurrentCUDAStream();
+-#if HIP_VERSION >= 301
++#if TORCH_HIP_VERSION >= 301
+   THCudaCheck(hipMemcpyWithStream(
+       THCStorage_(data)(state, self),
+       THStorage_(data)(src),
+@@ -61,7 +61,7 @@ void THStorage_(copyCuda)(THCState *state, THStorage *self, struct THCStorage *s
+ {
+   THArgCheck(self->nbytes() == src->nbytes(), 2, "size does not match");
+   cudaStream_t stream = c10::cuda::getCurrentCUDAStream();
+-#if HIP_VERSION >= 301
++#if TORCH_HIP_VERSION >= 301
+   THCudaCheck(hipMemcpyWithStream(
+       THStorage_(data)(self),
+       THCStorage_(data)(state, src),
+diff --git a/caffe2/operators/accuracy_op.cu b/caffe2/operators/accuracy_op.cu
+index 838d103b4c..f06663d71a 100644
+--- a/caffe2/operators/accuracy_op.cu
++++ b/caffe2/operators/accuracy_op.cu
+@@ -1,5 +1,6 @@
+ #include "caffe2/core/context_gpu.h"
+ #include "caffe2/operators/accuracy_op.h"
++#include "caffe2/utils/GpuAtomics.cuh"
+ #include "caffe2/utils/math.h"
+ 
+ #include <cub/block/block_reduce.cuh>
+@@ -34,7 +35,7 @@ __global__ void AccuracyKernel(
+     __syncthreads();
+   }
+   if (threadIdx.x == 0) {
+-    atomicAdd(accuracy, static_cast<float>(correct));
++    gpu_atomic_add(accuracy, static_cast<float>(correct));
+   }
+ }
+ 
+diff --git a/caffe2/operators/batch_gather_ops.cu b/caffe2/operators/batch_gather_ops.cu
+index e6cd72f43b..3b0d4fc16a 100644
+--- a/caffe2/operators/batch_gather_ops.cu
++++ b/caffe2/operators/batch_gather_ops.cu
+@@ -4,6 +4,7 @@
+ #include "caffe2/operators/batch_gather_ops.h"
+ // Shared batch kernel
+ #include "caffe2/operators/gather_op.cuh"
++#include "caffe2/utils/GpuAtomics.cuh"
+ 
+ namespace caffe2 {
+ 
+@@ -47,7 +48,7 @@ __global__ void BatchGatherGradientKernel(
+     const float* src_offset =
+         grad_data + i * gathered_batch_size + j * block_size;
+     float* dst_offset = out + i * data_batch_size + idx * block_size;
+-    atomicAdd(dst_offset + k, src_offset[k]);
++    gpu_atomic_add(dst_offset + k, src_offset[k]);
+   }
+ }
+ 
+diff --git a/caffe2/operators/channelwise_conv3d_op_cudnn.cu b/caffe2/operators/channelwise_conv3d_op_cudnn.cu
+index f9c9661844..1402cc0854 100644
+--- a/caffe2/operators/channelwise_conv3d_op_cudnn.cu
++++ b/caffe2/operators/channelwise_conv3d_op_cudnn.cu
+@@ -4,6 +4,7 @@
+ #include "caffe2/operators/conv_op.h"
+ #include "caffe2/operators/conv_op_cache_cudnn.h"
+ #include "caffe2/operators/conv_pool_op_base.h"
++#include "caffe2/utils/GpuAtomics.cuh"
+ 
+ // Adopted from caffe2 depthwise conv at
+ // pytorch/caffe2/caffe2/operators/depthwise_3x3_conv_op_cudnn.cu
+@@ -220,7 +221,7 @@ __global__ void DepthwiseConv3dBackpropFilterGPUKernelNCHW(
+             T* addr = filter_backprop +
+                 (in_d * filter_rows * filter_cols * filter_length) +
+                 (f_l * filter_rows * filter_cols) + (f_c + filter_cols * f_r);
+-            atomicAdd(addr, partial_sum);
++            gpu_atomic_add(addr, partial_sum);
+           }
+         }
+       }
+@@ -251,7 +252,7 @@ __global__ void DepthwiseConv3dBackpropFilterGPUKernelNCHW(
+               T* addr = filter_backprop +
+                   (in_d * filter_rows * filter_cols * filter_length) +
+                   (f_l * filter_rows * filter_cols) + (f_c + filter_cols * f_r);
+-              atomicAdd(addr, partial_sum);
++              gpu_atomic_add(addr, partial_sum);
+             }
+           }
+         }
+diff --git a/caffe2/operators/deform_conv_op.cu b/caffe2/operators/deform_conv_op.cu
+index f0f3987130..02e528c5f9 100644
+--- a/caffe2/operators/deform_conv_op.cu
++++ b/caffe2/operators/deform_conv_op.cu
+@@ -64,6 +64,7 @@
+ #include "caffe2/core/context_gpu.h"
+ #include "caffe2/operators/deform_conv_op.h"
+ #include "caffe2/operators/deform_conv_op_impl.h"
++#include "caffe2/utils/GpuAtomics.cuh"
+ 
+ namespace caffe2 {
+ 
+@@ -407,7 +408,7 @@ __global__ void deformable_col2im_gpu_kernel(
+               cur_w + dx,
+               height,
+               width);
+-          atomicAdd(grad_im + cur_bottom_grad_pos, weight * cur_top_grad);
++          gpu_atomic_add(grad_im + cur_bottom_grad_pos, weight * cur_top_grad);
+         }
+       }
+     }
+diff --git a/caffe2/operators/depthwise_3x3_conv_op_cudnn.cu b/caffe2/operators/depthwise_3x3_conv_op_cudnn.cu
+index 1d41edcadd..a39da22149 100644
+--- a/caffe2/operators/depthwise_3x3_conv_op_cudnn.cu
++++ b/caffe2/operators/depthwise_3x3_conv_op_cudnn.cu
+@@ -4,6 +4,7 @@
+ #include "caffe2/operators/conv_op.h"
+ #include "caffe2/operators/conv_op_cache_cudnn.h"
+ #include "caffe2/operators/conv_pool_op_base.h"
++#include "caffe2/utils/GpuAtomics.cuh"
+ 
+ namespace caffe2 {
+ 
+@@ -176,7 +177,7 @@ __global__ void DepthwiseConv2dBackpropFilterGPUKernelNCHW(
+ #endif
+           T* addr = filter_backprop + (in_d * filter_rows * filter_cols) +
+               (f_c + filter_cols * f_r);
+-          atomicAdd(addr, partial_sum);
++          gpu_atomic_add(addr, partial_sum);
+         }
+       }
+     } else {
+@@ -199,7 +200,7 @@ __global__ void DepthwiseConv2dBackpropFilterGPUKernelNCHW(
+ #endif
+             T* addr = filter_backprop + (in_d * filter_rows * filter_cols) +
+                 (f_c + filter_cols * f_r);
+-            atomicAdd(addr, partial_sum);
++            gpu_atomic_add(addr, partial_sum);
+           }
+         }
+       }
+diff --git a/caffe2/operators/elementwise_ops.cu b/caffe2/operators/elementwise_ops.cu
+index da702baf41..0d5cf6e602 100644
+--- a/caffe2/operators/elementwise_ops.cu
++++ b/caffe2/operators/elementwise_ops.cu
+@@ -10,7 +10,7 @@
+ 
+ #ifdef __HIPCC__
+ #include <hip/hip_version.h>
+-#if HIP_VERSION < 210
++#if TORCH_HIP_VERSION < 210
+ // rocblas doesn't fully support fp16 yet
+ #define ROCBLAS_FP16 0
+ #endif
+@@ -119,7 +119,7 @@ void device_reduce<at::Half>(
+     int N,
+     Tensor* buffer,
+     CUDAContext* context) {
+-#if HIP_VERSION >= 210
++#if TORCH_HIP_VERSION >= 210
+   auto buffer_size = 1;
+ 
+   if (buffer->numel() != buffer_size) {
+@@ -140,7 +140,7 @@ void device_reduce<at::Half>(
+       reinterpret_cast<const rocblas_half*>(buffer->data<at::Half>()),
+       0,
+       reinterpret_cast<rocblas_half*>(out)));
+-#elif HIP_VERSION < 210
++#elif TORCH_HIP_VERSION < 210
+    CAFFE_THROW("HIP rocblas doesn't fully support fp16 device_reduce yet.");
+ #else
+   auto buffer_size = 1;
+diff --git a/caffe2/operators/hip/pool_op_miopen.hip b/caffe2/operators/hip/pool_op_miopen.hip
+index 8eef417d8f..2371597170 100644
+--- a/caffe2/operators/hip/pool_op_miopen.hip
++++ b/caffe2/operators/hip/pool_op_miopen.hip
+@@ -73,7 +73,7 @@ class MIOPENPoolOp : public ConvPoolOpBase<HIPContext> {
+     H_out = Y->dim32(2);
+     W_out = Y->ndim() > 3 ? Y->dim32(3) : 1;
+ 
+-#if HIP_VERSION >= 303
++#if TORCH_HIP_VERSION >= 303
+     CAFFE_ENFORCE(kernel_.size() == 2 || kernel_.size() == 3, "MIOpen supports only 2D and 3D pooling");
+     MIOPEN_ENFORCE(miopenSetNdPoolingDescriptor(
+         pooling_desc_,
+@@ -146,7 +146,7 @@ class MIOPENPoolOp : public ConvPoolOpBase<HIPContext> {
+ 
+  protected:
+   size_t poolWsSize_;
+-#if HIP_VERSION>=303
++#if TORCH_HIP_VERSION>=303
+   int64_t* poolWs_;
+   std::vector<int64_t> mio_input_dims;
+   std::vector<int64_t> mio_output_dims;
+@@ -228,7 +228,7 @@ class MIOPENPoolGradientOp : public ConvPoolOpBase<HIPContext> {
+     const std::vector<int> X_HW_dims = GetDims(X);
+     ConvPoolOpBase<HIPContext>::ComputePads(X_HW_dims);
+ 
+-#if HIP_VERSION >= 303
++#if TORCH_HIP_VERSION >= 303
+     CAFFE_ENFORCE(kernel_.size() == 2 || kernel_.size() == 3, "MIOpen supports only 2D and 3D pooling");
+     MIOPEN_ENFORCE(miopenSetNdPoolingDescriptor(
+         pooling_desc_,
+@@ -276,7 +276,7 @@ class MIOPENPoolGradientOp : public ConvPoolOpBase<HIPContext> {
+     T* dXdata = dX->template mutable_data<T>();
+ 
+     if (mode_ == miopenPoolingMax) {
+-#if HIP_VERSION>=303
++#if TORCH_HIP_VERSION>=303
+       MIOPEN_ENFORCE(miopenPoolingGetWorkSpaceSizeV2(pooling_desc_, top_desc_, &poolWsSize_));
+ #else
+       MIOPEN_ENFORCE(miopenPoolingGetWorkSpaceSize(top_desc_, &poolWsSize_));
+@@ -341,7 +341,7 @@ class MIOPENPoolGradientOp : public ConvPoolOpBase<HIPContext> {
+ 
+  protected:
+   size_t poolWsSize_;
+-#if HIP_VERSION >= 303
++#if TORCH_HIP_VERSION >= 303
+   int64_t* poolWs_;
+   std::vector<int64_t> mio_input_dims;
+   std::vector<int64_t> mio_output_dims;
+diff --git a/caffe2/operators/multi_class_accuracy_op.cu b/caffe2/operators/multi_class_accuracy_op.cu
+index 3882cfcef7..fdb272c1c3 100644
+--- a/caffe2/operators/multi_class_accuracy_op.cu
++++ b/caffe2/operators/multi_class_accuracy_op.cu
+@@ -1,5 +1,6 @@
+ #include "caffe2/core/context_gpu.h"
+ #include "caffe2/operators/multi_class_accuracy_op.h"
++#include "caffe2/utils/GpuAtomics.cuh"
+ #include "caffe2/utils/math.h"
+ 
+ namespace caffe2 {
+@@ -18,9 +19,9 @@ __global__ void MultiClassAccuracyKernel(const int N, const int D, const float*
+     }
+     int labelid = labeldata[i];
+     if (maxid == labelid) {
+-      atomicAdd(accuracies + labelid, static_cast<float>(1));
++      gpu_atomic_add(accuracies + labelid, static_cast<float>(1));
+     }
+-    atomicAdd(amounts + labelid, static_cast<int>(1));
++    gpu_atomic_add(amounts + labelid, static_cast<int>(1));
+   }
+ }
+ __global__ void MultiClassAccuracyDivideKernel(
+diff --git a/caffe2/operators/pad_op_gpu.cu b/caffe2/operators/pad_op_gpu.cu
+index cce4aeb3ac..694fc1aadd 100644
+--- a/caffe2/operators/pad_op_gpu.cu
++++ b/caffe2/operators/pad_op_gpu.cu
+@@ -2,6 +2,7 @@
+ 
+ #include "caffe2/core/context_gpu.h"
+ #include "caffe2/operators/pad_op.h"
++#include "caffe2/utils/GpuAtomics.cuh"
+ 
+ namespace caffe2 {
+ 
+@@ -161,7 +162,7 @@ __global__ void PadImageGradientReflectNCHW(
+     w = max(w, -w);
+     h = min(h, 2 * height - h - 2);
+     w = min(w, 2 * width - w - 2);
+-    atomicAdd(&bottom_diff[(nc * height + h) * width + w], top_diff[index]);
++    gpu_atomic_add(&bottom_diff[(nc * height + h) * width + w], top_diff[index]);
+   }
+ }
+ 
+@@ -178,7 +179,7 @@ __global__ void PadImageGradientEdgeNCHW(
+     nc /= padded_height;
+     const int h = min(height - 1, max(ph - pad_t, 0));
+     const int w = min(width - 1, max(pw - pad_l, 0));
+-    atomicAdd(&bottom_diff[(nc * height + h) * width + w], top_diff[index]);
++    gpu_atomic_add(&bottom_diff[(nc * height + h) * width + w], top_diff[index]);
+   }
+ }
+ 
+@@ -219,7 +220,7 @@ __global__ void PadImageGradientReflectNHWC(
+     w = max(w, -w);
+     h = min(h, 2 * height - h - 2);
+     w = min(w, 2 * width - w - 2);
+-    atomicAdd(
++    gpu_atomic_add(
+         &bottom_diff[((n * height + h) * width + w) * channels + c],
+         top_diff[index]);
+   }
+@@ -240,7 +241,7 @@ __global__ void PadImageGradientEdgeNHWC(
+     n /= padded_height;
+     const int h = min(height - 1, max(ph - pad_t, 0));
+     const int w = min(width - 1, max(pw - pad_l, 0));
+-    atomicAdd(
++    gpu_atomic_add(
+         &bottom_diff[((n * height + h) * width + w) * channels + c],
+         top_diff[index]);
+   }
+diff --git a/caffe2/operators/relu_op.cu b/caffe2/operators/relu_op.cu
+index 31d2759ce9..3f311dce7b 100644
+--- a/caffe2/operators/relu_op.cu
++++ b/caffe2/operators/relu_op.cu
+@@ -37,7 +37,7 @@ __global__ void ReluCUDAKernel<half>(const int N, const half* X, half* Y) {
+   const int i = blockIdx.x * CAFFE_CUDA_NUM_THREADS + threadIdx.x;
+   if (i < N) {
+     const half kZero = __float2half(0.0f);
+-#if __CUDA_ARCH__ >= 530 || HIP_VERSION >= 300
++#if __CUDA_ARCH__ >= 530 || TORCH_HIP_VERSION >= 300
+     Y[i] = __hgt(__ldg(X + i), kZero) ? __ldg(X + i) : kZero;
+ #else
+     Y[i] = (__half2float(X[i]) > 0) ? X[i] : kZero;
+@@ -50,7 +50,7 @@ __global__ void ReluCUDAKernel<half2>(const int N, const half2* X, half2* Y) {
+   const int i = blockIdx.x * CAFFE_CUDA_NUM_THREADS + threadIdx.x;
+   if (i < N) {
+     const half2 kZero = __float2half2_rn(0.0f);
+-#if __CUDA_ARCH__ >= 530 || HIP_VERSION >= 300
++#if __CUDA_ARCH__ >= 530 || TORCH_HIP_VERSION >= 300
+     Y[i] = __hmul2(__hgt2(__ldg(X + i), kZero), __ldg(X + i));
+ #else
+     const float2 xx = __half22float2(X[i]);
+@@ -70,7 +70,7 @@ __global__ void
+ ReluGradientCUDAKernel(const int N, const T* dY, const T* Y, T* dX) {
+   const int i = blockIdx.x * CAFFE_CUDA_NUM_THREADS + threadIdx.x;
+   if (i < N) {
+-#if __CUDA_ARCH__ >= 350 || HIP_VERSION >= 300
++#if __CUDA_ARCH__ >= 350 || TORCH_HIP_VERSION >= 300
+     dX[i] = __ldg(Y + i) > T(0) ? __ldg(dY + i) : T(0);
+ #else
+     dX[i] = Y[i] > T(0) ? dY[i] : T(0);
+@@ -87,7 +87,7 @@ __global__ void ReluGradientCUDAKernel<half>(
+   const int i = blockIdx.x * CAFFE_CUDA_NUM_THREADS + threadIdx.x;
+   if (i < N) {
+     const half kZero = __float2half(0.0f);
+-#if __CUDA_ARCH__ >= 530 || HIP_VERSION >= 300
++#if __CUDA_ARCH__ >= 530 || TORCH_HIP_VERSION >= 300
+     dX[i] = __hgt(__ldg(Y + i), kZero) ? __ldg(dY + i) : kZero;
+ #else
+     dX[i] = (__half2float(Y[i]) > 0) ? dY[i] : kZero;
+@@ -104,7 +104,7 @@ __global__ void ReluGradientCUDAKernel<half2>(
+   const int i = blockIdx.x * CAFFE_CUDA_NUM_THREADS + threadIdx.x;
+   if (i < N) {
+     const half2 kZero = __float2half2_rn(0.0f);
+-#if __CUDA_ARCH__ >= 530 || HIP_VERSION >= 300
++#if __CUDA_ARCH__ >= 530 || TORCH_HIP_VERSION >= 300
+     dX[i] = __hmul2(__hgt2(__ldg(Y + i), kZero), __ldg(dY + i));
+ #else
+     const float2 dy = __half22float2(dY[i]);
+diff --git a/caffe2/operators/resize_3d_op.cu b/caffe2/operators/resize_3d_op.cu
+index 585981f7ae..e664528374 100644
+--- a/caffe2/operators/resize_3d_op.cu
++++ b/caffe2/operators/resize_3d_op.cu
+@@ -1,5 +1,6 @@
+ #include "caffe2/core/context_gpu.h"
+ #include "caffe2/operators/resize_3d_op.h"
++#include "caffe2/utils/GpuAtomics.cuh"
+ #include "caffe2/utils/math.h"
+ 
+ namespace caffe2 {
+@@ -74,9 +75,9 @@ __global__ void NearestNeighbor3DGradientKernel(
+         (((n * num_channels + c) * output_frames + out_f) * output_height +
+           out_y) * output_width + out_x;
+ #if __CUDA_ARCH__ >= 350
+-    atomicAdd(dX + out_index, __ldg(dY + index));
++    gpu_atomic_add(dX + out_index, __ldg(dY + index));
+ #else
+-    atomicAdd(dX + out_index, *(dY + index));
++    gpu_atomic_add(dX + out_index, *(dY + index));
+ #endif
+   }
+ }
+diff --git a/caffe2/operators/resize_op.cu b/caffe2/operators/resize_op.cu
+index 341d6046f9..e0345e6ad6 100644
+--- a/caffe2/operators/resize_op.cu
++++ b/caffe2/operators/resize_op.cu
+@@ -1,5 +1,6 @@
+ #include "caffe2/core/context_gpu.h"
+ #include "caffe2/operators/resize_op.h"
++#include "caffe2/utils/GpuAtomics.cuh"
+ #include "caffe2/utils/math.h"
+ 
+ namespace caffe2 {
+@@ -60,9 +61,9 @@ __global__ void NearestNeighborGradientKernel(
+     const int out_index =
+         ((n * num_channels + c) * output_height + out_y) * output_width + out_x;
+ #if __CUDA_ARCH__ >= 350
+-    atomicAdd(dX + out_index, __ldg(dY + index));
++    gpu_atomic_add(dX + out_index, __ldg(dY + index));
+ #else
+-    atomicAdd(dX + out_index, *(dY + index));
++    gpu_atomic_add(dX + out_index, *(dY + index));
+ #endif
+   }
+ }
+diff --git a/caffe2/operators/roi_align_gradient_op.cu b/caffe2/operators/roi_align_gradient_op.cu
+index c377db1841..5f27d89598 100644
+--- a/caffe2/operators/roi_align_gradient_op.cu
++++ b/caffe2/operators/roi_align_gradient_op.cu
+@@ -3,20 +3,13 @@
+ #include <stdio.h>
+ #include <cfloat>
+ #include "caffe2/core/context_gpu.h"
++#include "caffe2/utils/GpuAtomics.cuh"
+ #include "caffe2/utils/math.h"
+ 
+ namespace caffe2 {
+ 
+ namespace {
+ 
+-template <typename T>
+-inline __device__ T gpu_atomic_add(const T val, T* address);
+-
+-template <>
+-inline __device__ float gpu_atomic_add(const float val, float* address) {
+-  return atomicAdd(address, val);
+-}
+-
+ template <typename T>
+ __device__ void bilinear_interpolate_gradient(
+     const int height,
+@@ -174,13 +167,13 @@ __global__ void RoIAlignBackwardFeature(
+ 
+         if (x_low >= 0 && x_high >= 0 && y_low >= 0 && y_high >= 0) {
+           gpu_atomic_add(
+-              static_cast<T>(g1), offset_bottom_diff + y_low * width + x_low);
++              offset_bottom_diff + y_low * width + x_low, static_cast<T>(g1));
+           gpu_atomic_add(
+-              static_cast<T>(g2), offset_bottom_diff + y_low * width + x_high);
++              offset_bottom_diff + y_low * width + x_high, static_cast<T>(g2));
+           gpu_atomic_add(
+-              static_cast<T>(g3), offset_bottom_diff + y_high * width + x_low);
++              offset_bottom_diff + y_high * width + x_low, static_cast<T>(g3));
+           gpu_atomic_add(
+-              static_cast<T>(g4), offset_bottom_diff + y_high * width + x_high);
++              offset_bottom_diff + y_high * width + x_high, static_cast<T>(g4));
+         } // if
+       } // ix
+     } // iy
+diff --git a/caffe2/operators/roi_align_rotated_gradient_op.cu b/caffe2/operators/roi_align_rotated_gradient_op.cu
+index c7fae2403f..3b502771ef 100644
+--- a/caffe2/operators/roi_align_rotated_gradient_op.cu
++++ b/caffe2/operators/roi_align_rotated_gradient_op.cu
+@@ -8,20 +8,13 @@
+ #include <stdio.h>
+ #include <cfloat>
+ #include "caffe2/core/context_gpu.h"
++#include "caffe2/utils/GpuAtomics.cuh"
+ #include "caffe2/utils/math.h"
+ 
+ namespace caffe2 {
+ 
+ namespace {
+ 
+-template <typename T>
+-inline __device__ T gpu_atomic_add(const T val, T* address);
+-
+-template <>
+-inline __device__ float gpu_atomic_add(const float val, float* address) {
+-  return atomicAdd(address, val);
+-}
+-
+ template <typename T>
+ __device__ void bilinear_interpolate_gradient(
+     const int height,
+@@ -182,13 +175,13 @@ __global__ void RoIAlignRotatedBackward(
+ 
+         if (x_low >= 0 && x_high >= 0 && y_low >= 0 && y_high >= 0) {
+           gpu_atomic_add(
+-              static_cast<T>(g1), offset_bottom_diff + y_low * width + x_low);
++              offset_bottom_diff + y_low * width + x_low, static_cast<T>(g1));
+           gpu_atomic_add(
+-              static_cast<T>(g2), offset_bottom_diff + y_low * width + x_high);
++              offset_bottom_diff + y_low * width + x_high, static_cast<T>(g2));
+           gpu_atomic_add(
+-              static_cast<T>(g3), offset_bottom_diff + y_high * width + x_low);
++              offset_bottom_diff + y_high * width + x_low, static_cast<T>(g3));
+           gpu_atomic_add(
+-              static_cast<T>(g4), offset_bottom_diff + y_high * width + x_high);
++              offset_bottom_diff + y_high * width + x_high, static_cast<T>(g4));
+         } // if
+       } // ix
+     } // iy
+diff --git a/caffe2/operators/roi_pool_op.cu b/caffe2/operators/roi_pool_op.cu
+index 526420f97c..f15563a331 100644
+--- a/caffe2/operators/roi_pool_op.cu
++++ b/caffe2/operators/roi_pool_op.cu
+@@ -2,19 +2,12 @@
+ 
+ #include "caffe2/core/context_gpu.h"
+ #include "caffe2/operators/roi_pool_op.h"
++#include "caffe2/utils/GpuAtomics.cuh"
+ 
+ namespace caffe2 {
+ 
+ namespace {
+ 
+-template <typename T>
+-inline __device__ T gpu_atomic_add(const T val, T* address);
+-
+-template <>
+-inline __device__ float gpu_atomic_add(const float val, float* address) {
+-  return atomicAdd(address, val);
+-}
+-
+ template <typename T>
+ __global__ void ROIPoolForward(
+     const int nthreads,
+@@ -114,8 +107,8 @@ __global__ void ROIPoolBackward(
+     int argmax = offset_argmax_data[ph * pooled_width + pw];
+     if (argmax != -1) {
+       gpu_atomic_add(
+-          static_cast<T>(offset_top_diff[ph * pooled_width + pw]),
+-          offset_bottom_diff + argmax);
++          offset_bottom_diff + argmax,
++          static_cast<T>(offset_top_diff[ph * pooled_width + pw]));
+     }
+   }
+ }
+diff --git a/caffe2/operators/segment_reduction_op_gpu.cu b/caffe2/operators/segment_reduction_op_gpu.cu
+index 2de71df5d5..33befacc43 100644
+--- a/caffe2/operators/segment_reduction_op_gpu.cu
++++ b/caffe2/operators/segment_reduction_op_gpu.cu
+@@ -3,6 +3,7 @@
+ #include "caffe2/core/operator.h"
+ #include "caffe2/operators/segment_reduction_op.h"
+ #include "caffe2/operators/segment_reduction_op_gpu.cuh"
++#include "caffe2/utils/GpuAtomics.cuh"
+ #include "caffe2/utils/math.h"
+ 
+ namespace caffe2 {
+@@ -913,9 +914,9 @@ __global__ void UnsortedSegmentSumKernel(
+     int slice_idx = i / slize_sz;
+     int j = i % slize_sz;
+     SIndex segment = segments[slice_idx];
+-    atomicAdd(&out[segment * slize_sz + j], data[i]);
++    gpu_atomic_add(&out[segment * slize_sz + j], data[i]);
+     if (scales && j == 0) {
+-      atomicAdd(&scales[segment], 1);
++      gpu_atomic_add(&scales[segment], 1);
+     }
+   }
+ }
+@@ -1063,7 +1064,7 @@ class CUDAUnsortedSegmentSumOp : public Operator<CUDAContext> {
+ template <typename SIndex>
+ __global__ void segment_lengths_kernel(int N, const SIndex* X, SIndex* Y) {
+   CUDA_1D_KERNEL_LOOP(i, N) {
+-    atomicAdd(&Y[X[i]], 1);
++    gpu_atomic_add(&Y[X[i]], 1);
+   }
+ }
+ 
+diff --git a/caffe2/operators/sparse_to_dense_op.cu b/caffe2/operators/sparse_to_dense_op.cu
+index 93c1a8a167..e4b6da7579 100644
+--- a/caffe2/operators/sparse_to_dense_op.cu
++++ b/caffe2/operators/sparse_to_dense_op.cu
+@@ -2,6 +2,7 @@
+ 
+ #include "caffe2/core/common_gpu.h"
+ #include "caffe2/core/context_gpu.h"
++#include "caffe2/utils/GpuAtomics.cuh"
+ 
+ namespace caffe2 {
+ 
+@@ -11,7 +12,7 @@ namespace caffe2 {
+     CUDA_1D_KERNEL_LOOP(i, N) {
+       int idx = indices[i / block_nitems];
+       int dst_idx = block_nitems * idx + i % block_nitems;
+-      atomicAdd(&dst[dst_idx], vals[i]);
++      gpu_atomic_add(&dst[dst_idx], vals[i]);
+     }
+   }
+ 
+diff --git a/caffe2/operators/top_k_radix_selection.cuh b/caffe2/operators/top_k_radix_selection.cuh
+index 92e96f2ab7..250a075360 100644
+--- a/caffe2/operators/top_k_radix_selection.cuh
++++ b/caffe2/operators/top_k_radix_selection.cuh
+@@ -4,6 +4,7 @@
+ #include "caffe2/core/common_gpu.h"
+ #include "caffe2/utils/GpuDefs.cuh"
+ #include "caffe2/utils/GpuScanUtils.cuh"
++#include "caffe2/utils/GpuAtomics.cuh"
+ #include "caffe2/utils/math.h"
+ #include <cuda_runtime.h>
+ 
+@@ -181,7 +182,7 @@ __device__ void countRadixUsingMask(CountType counts[RadixSize],
+   if (getLaneId() == 0) {
+ #pragma unroll
+     for (unsigned int i = 0; i < RadixSize; ++i) {
+-      atomicAdd(&smem[i], counts[i]);
++      gpu_atomic_add(&smem[i], counts[i]);
+     }
+   }
+ 
+diff --git a/caffe2/operators/upsample_op.cu b/caffe2/operators/upsample_op.cu
+index 8f498f6850..60ab6889a5 100644
+--- a/caffe2/operators/upsample_op.cu
++++ b/caffe2/operators/upsample_op.cu
+@@ -2,6 +2,7 @@
+ 
+ #include "caffe2/core/context_gpu.h"
+ #include "caffe2/operators/upsample_op.h"
++#include "caffe2/utils/GpuAtomics.cuh"
+ #include "caffe2/utils/math.h"
+ 
+ namespace caffe2 {
+@@ -126,16 +127,16 @@ __global__ void UpsampleBilinearGradientKernel(
+     const float dYi = dY[index];
+ #endif
+ 
+-    atomicAdd(
++    gpu_atomic_add(
+         &dX[idx(n, num_channels, c, output_height, output_width, h1, w1)],
+         h0lambda * w0lambda * dYi);
+-    atomicAdd(
++    gpu_atomic_add(
+         &dX[idx(n, num_channels, c, output_height, output_width, h1, w1 + w1p)],
+         h0lambda * w1lambda * dYi);
+-    atomicAdd(
++    gpu_atomic_add(
+         &dX[idx(n, num_channels, c, output_height, output_width, h1 + h1p, w1)],
+         h1lambda * w0lambda * dYi);
+-    atomicAdd(
++    gpu_atomic_add(
+         &dX[idx(
+             n,
+             num_channels,
+diff --git a/caffe2/operators/utility_ops.cu b/caffe2/operators/utility_ops.cu
+index ace8345f4b..3b417ae012 100644
+--- a/caffe2/operators/utility_ops.cu
++++ b/caffe2/operators/utility_ops.cu
+@@ -8,6 +8,7 @@
+ 
+ #include "caffe2/core/context_gpu.h"
+ #include "caffe2/operators/flatten_op.h"
++#include "caffe2/utils/GpuAtomics.cuh"
+ #include "caffe2/utils/math.h"
+ 
+ namespace caffe2 {
+@@ -157,7 +158,7 @@ __global__ void AxpySliceKernel(
+       float a = *alpha[b];
+       const float* x_offset = X[b] + (i * slice_size);
+       for (int j = threadIdx.x; j < slice_size; j += blockDim.x) {
+-        atomicAdd(&y_offset[j], a * x_offset[j]);
++        gpu_atomic_add(&y_offset[j], a * x_offset[j]);
+       }
+     }
+   }
+@@ -182,7 +183,7 @@ __global__ void AxpySliceKernel2(
+     T_INDEX idx = Indices[i];
+     float* y_offset = Y + (idx * slice_size);
+     for (int j = threadIdx.x; j < slice_size; j += blockDim.x) {
+-      atomicAdd(&y_offset[j], alpha[0] * X[(i * slice_size) + j]);
++      gpu_atomic_add(&y_offset[j], alpha[0] * X[(i * slice_size) + j]);
+     }
+   }
+ }
+diff --git a/caffe2/sgd/adagrad_fused_op_gpu.cuh b/caffe2/sgd/adagrad_fused_op_gpu.cuh
+index e695dac37e..ee4b0d0255 100644
+--- a/caffe2/sgd/adagrad_fused_op_gpu.cuh
++++ b/caffe2/sgd/adagrad_fused_op_gpu.cuh
+@@ -8,6 +8,7 @@
+ #include "caffe2/core/common_gpu.h"
+ #include "caffe2/core/context_gpu.h"
+ #include "caffe2/core/operator.h"
++#include "caffe2/utils/GpuAtomics.cuh"
+ 
+ #ifdef __HIP_PLATFORM_HCC__
+ #define SEGREDUCE_MINBLOCKS 8
+@@ -103,7 +104,7 @@ randFactor<at::Half, float, NEAREST>::convertTypeFromTargetToParam(
+ }
+ 
+ static inline __device__ void gpuAtomicAdd(float* address, float val) {
+-  atomicAdd(address, val);
++  gpu_atomic_add(address, val);
+ }
+ 
+ static inline __device__ void gpuAtomicAdd(c10::Half* address, c10::Half val) {
+diff --git a/caffe2/utils/GpuAtomics.cuh b/caffe2/utils/GpuAtomics.cuh
+new file mode 100644
+index 0000000000..ad5d8725e0
+--- /dev/null
++++ b/caffe2/utils/GpuAtomics.cuh
+@@ -0,0 +1,28 @@
++#ifndef CAFFE2_UTILS_GPU_ATOMICS_H_
++#define CAFFE2_UTILS_GPU_ATOMICS_H_
++
++#include <cuda_runtime.h>
++
++namespace caffe2 {
++
++namespace {
++
++template <typename T>
++inline __device__ void gpu_atomic_add(T* address, const T val) {
++  atomicAdd(address, val);
++}
++
++template <>
++inline __device__ void gpu_atomic_add(float* address, const float val) {
++#if defined(__HIP_PLATFORM_HCC__) && defined(__gfx908__)
++  atomicAddNoRet(address, val);
++#else
++  atomicAdd(address, val);
++#endif
++}
++
++} // namespace
++
++} // namespace caffe2
++
++#endif  // CAFFE2_UTILS_GPU_ATOMICS_H_
+diff --git a/caffe2/utils/math_gpu.cu b/caffe2/utils/math_gpu.cu
+index 3de3ace02e..f23338da25 100644
+--- a/caffe2/utils/math_gpu.cu
++++ b/caffe2/utils/math_gpu.cu
+@@ -14,6 +14,7 @@
+ #include <thrust/functional.h>
+ 
+ #include "caffe2/core/context_gpu.h"
++#include "caffe2/utils/GpuAtomics.cuh"
+ #include "caffe2/utils/conversions.h"
+ 
+ #include "caffe2/utils/fixed_divisor.h"
+@@ -1674,9 +1675,9 @@ CAFFE2_CUDA_EXPORT void Dot<at::Half, CUDAContext>(
+     const at::Half* b,
+     at::Half* y,
+     CUDAContext* context) {
+-#if defined __HIP_PLATFORM_HCC__ && HIP_VERSION < 210
++#if defined __HIP_PLATFORM_HCC__ && TORCH_HIP_VERSION < 210
+   CAFFE_THROW("HIP currently does not support FP16 completely yet.");
+-#elif defined __HIP_PLATFORM_HCC__ && HIP_VERSION >= 210
++#elif defined __HIP_PLATFORM_HCC__ && TORCH_HIP_VERSION >= 210
+   CUBLAS_ENFORCE(cublasSetPointerMode(
+       context->cublas_handle(), CUBLAS_POINTER_MODE_DEVICE));
+   CUBLAS_ENFORCE(rocblas_hdot(
+@@ -2217,13 +2218,13 @@ __global__ void Im2ColNdNCHWCUDAKernel(
+       if (!kCol2Im) {
+         Y_data[col_index] = is_padding ? 0 : __ldg(X_data + img_index);
+       } else if (!is_padding) {
+-        atomicAdd(Y_data + img_index, __ldg(X_data + col_index));
++        gpu_atomic_add(Y_data + img_index, __ldg(X_data + col_index));
+       }
+ #else
+       if (!kCol2Im) {
+         Y_data[col_index] = is_padding ? 0 : X_data[img_index];
+       } else if (!is_padding) {
+-        atomicAdd(Y_data + img_index, X_data[col_index]);
++        gpu_atomic_add(Y_data + img_index, X_data[col_index]);
+       }
+ #endif
+     }
+diff --git a/cmake/Dependencies.cmake b/cmake/Dependencies.cmake
+index 5d57b9ca78..6273e7b849 100644
+--- a/cmake/Dependencies.cmake
++++ b/cmake/Dependencies.cmake
+@@ -1206,6 +1206,7 @@ if(USE_ROCM)
+     list(APPEND HIP_CXX_FLAGS -DCUDA_HAS_FP16=1)
+     list(APPEND HIP_CXX_FLAGS -D__HIP_NO_HALF_OPERATORS__=1)
+     list(APPEND HIP_CXX_FLAGS -D__HIP_NO_HALF_CONVERSIONS__=1)
++    list(APPEND HIP_CXX_FLAGS -DTORCH_HIP_VERSION=${TORCH_HIP_VERSION})
+     list(APPEND HIP_CXX_FLAGS -Wno-macro-redefined)
+     list(APPEND HIP_CXX_FLAGS -Wno-inconsistent-missing-override)
+     list(APPEND HIP_CXX_FLAGS -Wno-exceptions)
+@@ -1218,6 +1219,8 @@ if(USE_ROCM)
+     list(APPEND HIP_CXX_FLAGS -DTHRUST_DEVICE_SYSTEM=THRUST_DEVICE_SYSTEM_HIP)
+     list(APPEND HIP_CXX_FLAGS -std=c++14)
+     add_definitions(-DROCM_VERSION=${ROCM_VERSION_DEV_INT})
++    add_definitions(-DTORCH_HIP_VERSION=${TORCH_HIP_VERSION})
++    message("TORCH_HIP_VERSION=${TORCH_HIP_VERSION} is added as a compiler defines")
+ 
+     if(CMAKE_BUILD_TYPE MATCHES Debug)
+        list(APPEND HIP_CXX_FLAGS -g2)
+diff --git a/cmake/Modules/Findblis.cmake b/cmake/Modules/Findblis.cmake
+new file mode 100644
+index 0000000000..4d20de67ca
+--- /dev/null
++++ b/cmake/Modules/Findblis.cmake
+@@ -0,0 +1,65 @@
++SET(BLIS_INCLUDE_SEARCH_PATHS
++ /usr/include
++ /usr/include/blis
++ /usr/local/include 
++ /usr/local/include/blis
++ /usr/local/opt/blis/include
++ /opt/blis/include
++ $ENV{BLIS_HOME}
++ $ENV{BLIS_HOME}/include
++
++)
++
++SET(BLIS_LIB_SEARCH_PATHS
++ /lib
++ /lib/blis
++ /lib64
++ /lib64/blis
++ /usr/lib
++ /usr/lib/blis
++ /usr/lib64
++ /usr/lib64/blis
++ /usr/local/lib
++ /usr/local/lib64
++ /usr/local/opt/blis/lib
++ /opt/blis/lib
++ $ENV{BLIS}
++ $ENV{BLIS}/lib
++ $ENV{BLIS_HOME}
++ $ENV{BLIS_HOME}/lib
++)
++
++FIND_PATH(BLIS_INCLUDE_DIR NAMES cblas.h blis.h PATHS ${BLIS_INCLUDE_SEARCH_PATHS})
++FIND_LIBRARY(BLIS_LIB NAMES blis PATHS ${BLIS_LIB_SEARCH_PATHS})
++
++SET(BLIS_FOUND ON)
++
++#    Check include files
++IF(NOT BLIS_INCLUDE_DIR)
++        SET(BLIS_FOUND OFF)
++        MESSAGE(STATUS "Could not find BLIS include. Turning BLIS_FOUND off")
++ENDIF()
++
++#    Check libraries
++IF(NOT BLIS_LIB)
++        SET(BLIS_FOUND OFF)
++        MESSAGE(STATUS "Could not find BLIS lib. Turning BLIS_FOUND off")
++ENDIF()
++
++IF (BLIS_FOUND)
++        IF (NOT BLIS_FIND_QUIETLY)
++                MESSAGE(STATUS "Found BLIS libraries: ${BLIS_LIB}")
++                MESSAGE(STATUS "Found BLIS include: ${BLIS_INCLUDE_DIR}")
++        ENDIF (NOT BLIS_FIND_QUIETLY)
++ELSE (BLIS_FOUND)
++        IF (BLIS_FIND_REQUIRED)
++                MESSAGE(FATAL_ERROR "Could not find BLIS")
++        ENDIF (BLIS_FIND_REQUIRED)
++ENDIF (BLIS_FOUND)
++
++MARK_AS_ADVANCED(
++        BLIS_INCLUDE_DIR
++        BLIS_LIB
++        blis
++)
++
+diff --git a/cmake/public/LoadHIP.cmake b/cmake/public/LoadHIP.cmake
+index 9cdde76e53..4bb76ce9f7 100644
+--- a/cmake/public/LoadHIP.cmake
++++ b/cmake/public/LoadHIP.cmake
+@@ -131,7 +131,7 @@ else()
+ endif()
+ 
+ if(NOT DEFINED ENV{PYTORCH_ROCM_ARCH})
+-  set(PYTORCH_ROCM_ARCH gfx803;gfx900;gfx906;gfx908)
++  set(PYTORCH_ROCM_ARCH gfx900;gfx906;gfx908;gfx90a;gfx1030)
+ else()
+   set(PYTORCH_ROCM_ARCH $ENV{PYTORCH_ROCM_ARCH})
+ endif()
+@@ -170,6 +170,11 @@ if(HIP_FOUND)
+   message("ROCM_VERSION_DEV_PATCH: ${ROCM_VERSION_DEV_PATCH}")
+   message("ROCM_VERSION_DEV_INT:   ${ROCM_VERSION_DEV_INT}")
+ 
++  math(EXPR TORCH_HIP_VERSION "(${HIP_VERSION_MAJOR} * 100) + ${HIP_VERSION_MINOR}")
++  message("HIP_VERSION_MAJOR: ${HIP_VERSION_MAJOR}")
++  message("HIP_VERSION_MINOR: ${HIP_VERSION_MINOR}")
++  message("TORCH_HIP_VERSION: ${TORCH_HIP_VERSION}")
++
+   message("\n***** Library versions from dpkg *****\n")
+   execute_process(COMMAND dpkg -l COMMAND grep rocm-dev COMMAND awk "{print $2 \" VERSION: \" $3}")
+   execute_process(COMMAND dpkg -l COMMAND grep rocm-libs COMMAND awk "{print $2 \" VERSION: \" $3}")
+diff --git a/docker/pytorch/cpu-only/Dockerfile b/docker/pytorch/cpu-only/Dockerfile
+new file mode 100644
+index 0000000000..a8d4d9a62c
+--- /dev/null
++++ b/docker/pytorch/cpu-only/Dockerfile
+@@ -0,0 +1,63 @@
++# syntax = docker/dockerfile:experimental
++#
++# NOTE: To build this you will need a docker version > 18.06 with
++#       experimental enabled and DOCKER_BUILDKIT=1
++#
++#       For reference:
++#           https://docs.docker.com/develop/develop-images/build_enhancements/
++#
++# This Dockerfile will build Docker Image with PyTorch+MKLDNN+BLIS and Torchvision installed for CPU only
++#
++# BLIS_URL can be provided by user while building the Docker Image (By Default, it is set to FLAME BLIS git repo)
++# Example commandline to build PyTorch with AMD BLIS
++# DOCKER_BUILDKIT=1 docker build --build-arg BLIS_URL=https://github.com/amd/blis.git . -t Docker-Image-Repo-Name
++ARG BASE_IMAGE=ubuntu:18.04
++ARG PYTHON_VERSION=3.7
++
++FROM ${BASE_IMAGE} as dev-base
++CMD echo "Welcome to the PyTorch Docker Container!" && \
++    echo "Version of PyTorch Installed: " && python -c 'import torch; print(torch.__version__)' && \
++    echo "Version of Torchvision Installed: " && python -c 'import torchvision; print(torchvision.__version__)' && \
++    /bin/bash
++RUN --mount=type=cache,id=apt-dev,target=/var/cache/apt \
++    apt-get update && apt-get install -y --no-install-recommends \
++        build-essential \
++        ca-certificates \
++        ccache \
++        cmake \
++        curl \
++        git \
++        libjpeg-dev \
++        libpng-dev \
++        vim \
++        wget && \
++    rm -rf /var/lib/apt/lists/*
++RUN /usr/sbin/update-ccache-symlinks
++RUN mkdir /opt/ccache && ccache --set-config=cache_dir=/opt/ccache
++ENV PATH /opt/conda/bin:$PATH
++
++FROM dev-base as conda
++RUN curl -v -o ~/miniconda.sh -O https://repo.continuum.io/miniconda/Miniconda3-latest-Linux-x86_64.sh && \
++    chmod +x ~/miniconda.sh && \
++    ~/miniconda.sh -b -p /opt/conda && \
++    rm ~/miniconda.sh && \
++    /opt/conda/bin/conda install -y python=${PYTHON_VERSION} conda-build && \
++    /opt/conda/bin/conda install -y nomkl pyyaml numpy ipython ninja setuptools cmake cffi typing future && \
++    /opt/conda/bin/conda clean -ya
++
++WORKDIR /root
++ARG BLIS_URL=https://github.com/flame/blis.git
++# Download, Build BLIS with multithreading support and place necessary library and include files at BLIS_HOME/lib and BLIS_HOME/include respectively
++RUN git clone ${BLIS_URL} && cd blis && \
++    ./configure --prefix=/root/BLISBuild --enable-cblas --enable-threading=openmp auto && make -j && make install && \
++    if [ ! -e /root/BLISBuild/lib/libblis.so ] ; then cp /root/BLISBuild/lib/libblis*.so /root/BLISBuild/lib/libblis.so ; fi
++
++# Build PyTorch with MKLDNN+BLIS (CPU only)
++RUN git clone https://github.com/ROCmSoftwarePlatform/pytorch.git && cd pytorch && \
++    git submodule update --init --recursive && \
++    export PATH=/root/BLISBuild/include/blis:$PATH LD_LIBRARY_PATH=/root/BLISBuild/lib:$LD_LIBRARY_PATH && \
++    export BLIS_HOME=/root/BLISBuild BLAS=blis USE_MKLDNN_CBLAS=ON WITH_BLAS=blis && USE_ROCM=0 python setup.py install
++
++# Build Torchvision for CPU only
++RUN git clone https://github.com/pytorch/vision.git && cd vision && \
++    USE_ROCM=0 python setup.py install
+diff --git a/related_commits b/related_commits
+new file mode 100644
+index 0000000000..b2874f49b4
+--- /dev/null
++++ b/related_commits
+@@ -0,0 +1,4 @@
++ubuntu|pytorch|apex|none|
++centos|pytorch|apex|none|
++ubuntu|pytorch|torchvision|master|7bc5bd855536c34a1759d125436f791dde4fb8b7
++centos|pytorch|torchvision|master|7bc5bd855536c34a1759d125436f791dde4fb8b7
+diff --git a/test/test_cuda.py b/test/test_cuda.py
+index ae93b6bd50..b8eccea256 100644
+--- a/test/test_cuda.py
++++ b/test/test_cuda.py
+@@ -1250,6 +1250,8 @@ class TestCuda(TestCase):
+         with torch.cuda.device(d1):
+             self.assertGreater(e0.elapsed_time(e2), 0)
+ 
++    # XXX: this test only fails with hip-clang. revisit this once the dust has settled there.
++    @skipIfRocm
+     def test_record_stream(self):
+         cycles_per_ms = get_cycles_per_ms()
+ 
+diff --git a/test/test_unary_ufuncs.py b/test/test_unary_ufuncs.py
+index 29f62c234e..363cb53ecf 100644
+--- a/test/test_unary_ufuncs.py
++++ b/test/test_unary_ufuncs.py
+@@ -11,7 +11,8 @@ import unittest
+ from torch._six import inf, nan
+ from torch.testing._internal.common_utils import (
+     TestCase, run_tests, torch_to_numpy_dtype_dict, numpy_to_torch_dtype_dict,
+-    suppress_warnings, make_tensor, TEST_SCIPY, slowTest, skipIfNoSciPy, IS_WINDOWS)
++    suppress_warnings, make_tensor, TEST_SCIPY, slowTest, skipIfNoSciPy,
++    IS_WINDOWS, TEST_WITH_ROCM)
+ from torch.testing._internal.common_methods_invocations import (
+     unary_ufuncs, _NOTHING)
+ from torch.testing._internal.common_device_type import (
+@@ -544,6 +545,8 @@ class TestUnaryUfuncs(TestCase):
+ 
+     @dtypes(torch.cfloat, torch.cdouble)
+     def test_complex_edge_values(self, device, dtype):
++        if device == 'cpu' and dtype == torch.cfloat and TEST_WITH_ROCM:
++            raise self.skipTest("test_complex_edge_values_cpu_complex64 fails on ROCm")
+         # sqrt Test Reference: https://github.com/pytorch/pytorch/pull/47424
+         x = torch.tensor(0. - 1.0e+20j, dtype=dtype, device=device)
+         self.compare_with_numpy(torch.sqrt, np.sqrt, x)
+diff --git a/torch/csrc/cuda/nccl.cpp b/torch/csrc/cuda/nccl.cpp
+index 0248e81496..cca61a870a 100644
+--- a/torch/csrc/cuda/nccl.cpp
++++ b/torch/csrc/cuda/nccl.cpp
+@@ -89,7 +89,7 @@ ncclDataType_t to_nccl_data_type(c10::ScalarType type) {
+       return ncclDataType_t::ncclUint8;
+     case at::kBool:
+       return ncclDataType_t::ncclUint8;
+-#if defined(__HIP_PLATFORM_HCC__) && HIP_VERSION >= 301
++#if defined(__HIP_PLATFORM_HCC__) && TORCH_HIP_VERSION >= 301
+     case at::kBFloat16:
+       return ncclDataType_t::ncclBfloat16;
+ #endif
+diff --git a/torch/csrc/jit/codegen/fuser/codegen.cpp b/torch/csrc/jit/codegen/fuser/codegen.cpp
+index ce35f2fa9e..1d43587704 100644
+--- a/torch/csrc/jit/codegen/fuser/codegen.cpp
++++ b/torch/csrc/jit/codegen/fuser/codegen.cpp
+@@ -664,15 +664,16 @@ std::string generateKernel(
+   // clang-format off
+ #ifdef __HIP_PLATFORM_HCC__
+ #if ROCM_VERSION < 40200
+-  if (use_cuda && has_half_tensor) {
+-    env.s("RuntimeHeader", R"(
++  if (use_cuda) {
++    std::string RuntimeHeader = R"(
+ #include <hip/hip_runtime.h>
++)";
++    if (has_half_tensor) {
++      RuntimeHeader += R"(
+ #include <hip/hip_fp16.h>
+-)");
+-  } else if (use_cuda) {
+-    env.s("RuntimeHeader", R"(
+-#include <hip/hip_runtime.h>
+-)");
++)";
++    }
++    env.s("RuntimeHeader", RuntimeHeader);
+   }
+ #else
+   // Still need the key defined, but empty.
+diff --git a/torch/csrc/jit/codegen/fuser/cuda/fused_kernel.cpp b/torch/csrc/jit/codegen/fuser/cuda/fused_kernel.cpp
+index 73daa194d8..15721517cc 100644
+--- a/torch/csrc/jit/codegen/fuser/cuda/fused_kernel.cpp
++++ b/torch/csrc/jit/codegen/fuser/cuda/fused_kernel.cpp
+@@ -181,7 +181,7 @@ FusedKernelCUDA::FusedKernelCUDA(
+       nvrtc().cuModuleGetFunction(&function_, module_, name_.c_str()));
+ 
+   // Computes max blocks
+-#if defined(__HIP_PLATFORM_HCC__) && HIP_VERSION < 305
++#if defined(__HIP_PLATFORM_HCC__) && TORCH_HIP_VERSION < 305
+   // HIP function signature is not compatible yet
+   uint32_t max_blocks;
+   AT_CUDA_DRIVER_CHECK(nvrtc().hipOccupancyMaxActiveBlocksPerMultiprocessor(
+diff --git a/torch/lib/c10d/ProcessGroupNCCL.cpp b/torch/lib/c10d/ProcessGroupNCCL.cpp
+index 24acd14587..b8c76d988e 100644
+--- a/torch/lib/c10d/ProcessGroupNCCL.cpp
++++ b/torch/lib/c10d/ProcessGroupNCCL.cpp
+@@ -59,7 +59,7 @@ std::map<at::ScalarType, ncclDataType_t> ncclDataType = {
+     {at::kLong, ncclInt64},
+     {at::kHalf, ncclHalf},
+     {at::kBool, ncclUint8},
+-#if defined(__HIP_PLATFORM_HCC__) && HIP_VERSION >= 301
++#if defined(__HIP_PLATFORM_HCC__) && TORCH_HIP_VERSION >= 301
+     {at::kBFloat16, ncclBfloat16},
+ #endif
+ };
+diff --git a/torch/utils/cpp_extension.py b/torch/utils/cpp_extension.py
+index 6fb1fbba98..8395b9ae1e 100644
+--- a/torch/utils/cpp_extension.py
++++ b/torch/utils/cpp_extension.py
+@@ -1592,7 +1592,7 @@ def _get_rocm_arch_flags(cflags: Optional[List[str]] = None) -> List[str]:
+     # Use same defaults from file cmake/public/LoadHIP.cmake.
+     # Must keep in sync if defaults change.
+     # Allow env var to override, just like during initial cmake build.
+-    archs = os.environ.get('PYTORCH_ROCM_ARCH', 'gfx803;gfx900;gfx906;gfx908')
++    archs = os.environ.get('PYTORCH_ROCM_ARCH', 'gfx900;gfx906;gfx908;gfx90a;gfx1030')
+     flags = ['--amdgpu-target=%s' % arch for arch in archs.split(';')]
+     flags += ['-fno-gpu-rdc']
+     return flags
+diff --git a/torch/utils/hipify/cuda_to_hip_mappings.py b/torch/utils/hipify/cuda_to_hip_mappings.py
+index 38b18acdc0..7a5a84e91a 100644
+--- a/torch/utils/hipify/cuda_to_hip_mappings.py
++++ b/torch/utils/hipify/cuda_to_hip_mappings.py
+@@ -7893,7 +7893,7 @@ CUDA_SPARSE_MAP = collections.OrderedDict(
+ PYTORCH_SPECIFIC_MAPPINGS = collections.OrderedDict(
+     [
+         ("USE_CUDA", ("USE_ROCM", API_PYTORCH)),
+-        ("CUDA_VERSION", ("HIP_VERSION", API_PYTORCH)),
++        ("CUDA_VERSION", ("TORCH_HIP_VERSION", API_PYTORCH)),
+         ("cudaHostAllocator", ("hipHostAllocator", API_PYTORCH)),
+         ("cudaDeviceAllocator", ("hipDeviceAllocator", API_PYTORCH)),
+         ("define MAX_NUM_BLOCKS 200", ("define MAX_NUM_BLOCKS 64", API_PYTORCH)),
+@@ -8052,6 +8052,7 @@ CAFFE2_SPECIFIC_MAPPINGS = collections.OrderedDict(
+         ("/THCCachingAllocator_gpu", ("/hip/THCCachingAllocator_gpu", API_CAFFE2)),
+         ("/top_k_heap_selection", ("/hip/top_k_heap_selection", API_CAFFE2)),
+         ("/top_k_radix_selection", ("/hip/top_k_radix_selection", API_CAFFE2)),
++        ("/GpuAtomics", ("/hip/GpuAtomics", API_CAFFE2)),
+         ("/GpuDefs", ("/hip/GpuDefs", API_CAFFE2)),
+         ("/GpuScanUtils", ("/hip/GpuScanUtils", API_CAFFE2)),
+         ("/GpuBitonicSort", ("/hip/GpuBitonicSort", API_CAFFE2)),
+@@ -8078,6 +8079,7 @@ CAFFE2_SPECIFIC_MAPPINGS = collections.OrderedDict(
+         # the ordered dict guarantees this pattern will match first, before "CUDA"
+         ("CUDA_KERNEL_ASSERT", ("CUDA_KERNEL_ASSERT", API_CAFFE2)),
+         ("lazyInitCUDA", ("lazyInitCUDA", API_CAFFE2)),
++        ("CUDA_VERSION", ("TORCH_HIP_VERSION", API_CAFFE2)),
+         ("CUDA", ("HIP", API_CAFFE2)),
+         ("Cuda", ("Hip", API_CAFFE2)),
+         ("cuda_", ("hip_", API_CAFFE2)),
+diff --git a/torch/utils/hipify/hipify_python.py b/torch/utils/hipify/hipify_python.py
+index 6697f1e014..b1d1e3abca 100644
+--- a/torch/utils/hipify/hipify_python.py
++++ b/torch/utils/hipify/hipify_python.py
+@@ -809,8 +809,9 @@ def preprocessor(
+     # Include header if device code is contained.
+     output_source = hip_header_magic(output_source)
+ 
++    # NOTE: No longer needed; compiler now handles extern __shared__ correctly without special syntax.
+     # Replace the extern __shared__
+-    output_source = replace_extern_shared(output_source)
++    #output_source = replace_extern_shared(output_source)
+ 
+     # Don't write out identical hipified files for extensions if dirpath has not changed
+     if (
