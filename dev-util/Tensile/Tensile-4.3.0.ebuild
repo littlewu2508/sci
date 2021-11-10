@@ -40,12 +40,24 @@ src_prepare() {
 
 	mv ${PN}/cmake "${T}"/ || die
 
-	sed -e "/HipClangVersion/s/0,0,0/$(ver_rs 1-3 ,)/" \
+	sed -e "/HipClangVersion/s/0,0,0/$(hipconfig -v)/" \
 		-e "/SourcePath/s,os\.path\.join.*$,\"${EPREFIX}/usr/share/${PN}\"," \
 		-i ${PN}/Common.py || die
 
 	sed -e "s|os\.path\.dirname.*$|\"${EPREFIX}/usr/share/Tensile\", end='')|" \
 		-i ${PN}/__init__.py || die
+
+	sed -e "/package_data/d" -e "/data_files/d" -i setup.py || die
+	# echo "include Tensile/Components" >> MANIFEST.in || die
+}
+
+python_install() {
+	distutils-r1_python_install
+
+
+	python_moduleinto Tensile
+	pushd Tensile
+	python_domodule Components Configs ReplacementKernels ReplacementKernels-cov3 Tests Utilities Perf
 }
 
 src_install() {
