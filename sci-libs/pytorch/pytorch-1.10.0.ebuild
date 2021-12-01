@@ -91,12 +91,12 @@ RDEPEND="
 	python? ( ${PYTHON_DEPS}
 		dev-python/pybind11[${PYTHON_USEDEP}]
 		dev-python/numpy[${PYTHON_USEDEP}]
-		dev-python/protobuf-python:0/30
+		dev-python/protobuf-python
 	)
 	redis? ( dev-db/redis )
 	zeromq? ( net-libs/zeromq )
 	dev-cpp/eigen
-	dev-libs/protobuf:0/30
+	dev-libs/protobuf
 	dev-libs/libuv
 "
 
