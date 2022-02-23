@@ -24,7 +24,9 @@ DEPEND="${RDEPEND}
 	dev-util/hip"
 
 PATCHES=( "${FILESDIR}"/${PN}-4.3.0-output-commands.patch
-		  "${FILESDIR}"/${PN}-4.3.0-hsaco-compile-specified-arch.patch )
+		  "${FILESDIR}"/${PN}-4.3.0-hsaco-compile-specified-arch.patch
+		  "${FILESDIR}"/${PN}-4.3.0-gfx1031.patch
+	  )
 
 S="${WORKDIR}/${PN}-rocm-${PV}"
 CMAKE_USE_DIR="${WORKDIR}/Source"
