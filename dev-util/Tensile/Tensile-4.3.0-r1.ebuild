@@ -19,20 +19,22 @@ IUSE=""
 
 RDEPEND="${PYTHON_DEPS}
 	dev-python/pyyaml[${PYTHON_USEDEP}]
-	dev-python/msgpack[${PYTHON_USEDEP}]"
+	dev-python/msgpack[${PYTHON_USEDEP}]
+	>=dev-util/rocm-smi-4.3.0"
 DEPEND="${RDEPEND}
 	dev-util/hip"
 
 PATCHES=( "${FILESDIR}"/${PN}-4.3.0-output-commands.patch
-		  "${FILESDIR}"/${PN}-5.0.1-gfx1031.patch
-		  "${FILESDIR}"/Tensile-5.0.1-fix-arch-parse.patch
-		  "${FILESDIR}"/Tensile-5.0.1-use-ninja.patch
-		  "${FILESDIR}"/Tensile-5.0.1-gentoopath.patch
-		  "${FILESDIR}"/1419.patch
+		  "${FILESDIR}"/${PN}-4.3.0-hsaco-compile-specified-arch.patch
+		  "${FILESDIR}"/${PN}-4.3.0-gfx1031.patch
+		  "${FILESDIR}"/${PN}-5.0.1-fix-arch-parse.patch
+		  "${FILESDIR}"/${PN}-5.0.1-use-ninja.patch
+		  "${FILESDIR}"/${PN}-5.0.1-gentoopath.patch
 	  )
 
 S="${WORKDIR}/${PN}-rocm-${PV}"
-CMAKE_USE_DIR="${WORKDIR}/Source"
+
+distutils_enable_tests pytest
 
 src_prepare() {
 	distutils-r1_src_prepare
@@ -49,6 +51,8 @@ src_prepare() {
 		-e "/SourcePath/s,globalParameters\[\"ScriptPath\"\],${Tensile_share_dir}," \
 		-i Common.py || die
 
+	sed  -e "/CMAKE_CXX_COMPILER/s,globalParameters\[\"ROCmBinPath\"\],\"${EPREFIX}/usr/lib/hip/bin\"," -i ClientExecutable.py || die
+
 	sed -e "/scriptDir/s,os.path.realpath(__file__),${Tensile_share_dir}," -i ReplacementKernels.py || die
 
 	sed -e "s,os.path.dirname(os.path.realpath(__file__)),${Tensile_share_dir},g" -i ${PN}.py || die
@@ -60,12 +64,18 @@ src_prepare() {
 	sed -e "/package_data/d" -e "/data_files/d" -i setup.py || die
 }
 
+python_test() {
+	distutils_install_for_testing
+	# pushd "${S}/${PN}/Tests"
+	ROCM_PATH="${EPREFIX}/usr" epytest --builddir="${T}/test_build"
+}
+
 python_install() {
 	distutils-r1_python_install
 
 	python_moduleinto Tensile
 	pushd Tensile
-	python_domodule Components # Tests
+	python_domodule Components
 	python_newexe Utilities/merge.py ${PN}-merge
 }
 
