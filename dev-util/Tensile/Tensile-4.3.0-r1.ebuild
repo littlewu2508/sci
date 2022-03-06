@@ -23,6 +23,7 @@ RDEPEND="${PYTHON_DEPS}
 	>=dev-util/rocm-smi-4.3.0"
 DEPEND="${RDEPEND}
 	dev-util/hip"
+RESTRICT="test" # test before install is hard.
 
 PATCHES=( "${FILESDIR}"/${PN}-4.3.0-output-commands.patch
 		  "${FILESDIR}"/${PN}-4.3.0-hsaco-compile-specified-arch.patch
@@ -33,8 +34,6 @@ PATCHES=( "${FILESDIR}"/${PN}-4.3.0-output-commands.patch
 	  )
 
 S="${WORKDIR}/${PN}-rocm-${PV}"
-
-distutils_enable_tests pytest
 
 src_prepare() {
 	distutils-r1_src_prepare
@@ -62,12 +61,6 @@ src_prepare() {
 	popd || die
 
 	sed -e "/package_data/d" -e "/data_files/d" -i setup.py || die
-}
-
-python_test() {
-	distutils_install_for_testing
-	# pushd "${S}/${PN}/Tests"
-	ROCM_PATH="${EPREFIX}/usr" epytest --builddir="${T}/test_build"
 }
 
 python_install() {

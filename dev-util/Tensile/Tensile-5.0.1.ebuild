@@ -19,9 +19,11 @@ IUSE=""
 
 RDEPEND="${PYTHON_DEPS}
 	dev-python/pyyaml[${PYTHON_USEDEP}]
-	dev-python/msgpack[${PYTHON_USEDEP}]"
+	dev-python/msgpack[${PYTHON_USEDEP}]
+	>=dev-util/rocm-smi-4.3.0"
 DEPEND="${RDEPEND}
 	dev-util/hip"
+RESTRICT="test" # test before install is hard.
 
 PATCHES=( "${FILESDIR}"/${PN}-4.3.0-output-commands.patch
 		  "${FILESDIR}"/${PN}-5.0.1-gfx1031.patch
@@ -32,7 +34,6 @@ PATCHES=( "${FILESDIR}"/${PN}-4.3.0-output-commands.patch
 	  )
 
 S="${WORKDIR}/${PN}-rocm-${PV}"
-CMAKE_USE_DIR="${WORKDIR}/Source"
 
 src_prepare() {
 	distutils-r1_src_prepare
@@ -65,7 +66,7 @@ python_install() {
 
 	python_moduleinto Tensile
 	pushd Tensile
-	python_domodule Components # Tests
+	python_domodule Components
 	python_newexe Utilities/merge.py ${PN}-merge
 }
 
