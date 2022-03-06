@@ -37,23 +37,28 @@ CMAKE_USE_DIR="${WORKDIR}/Source"
 src_prepare() {
 	distutils-r1_src_prepare
 
-	mv ${PN}/Source "${WORKDIR}"/ || die
+	pushd ${PN} || die
+
 	sed -e "/ROCM_SMI_ROOT/s,lib,$(get_libdir)," \
-		-i "${WORKDIR}"/Source/cmake/FindROCmSMI.cmake || die
+		-i Source/cmake/FindROCmSMI.cmake || die
 	sed -r -e "/TENSILE_USE_LLVM/s/ON/OFF/" \
-		-i "${WORKDIR}"/Source/CMakeLists.txt || die
+		-i Source/CMakeLists.txt || die
 
-	mv ${PN}/cmake "${T}"/ || die
-
+	local Tensile_share_dir="\"${EPREFIX}/usr/share/${PN}\""
 	sed -e "/HipClangVersion/s/0,0,0/$(hipconfig -v)/" \
-		-e "/SourcePath/s,os\.path\.join.*$,\"${EPREFIX}/usr/share/${PN}\"," \
-		-i ${PN}/Common.py || die
+		-e "/SourcePath/s,globalParameters\[\"ScriptPath\"\],${Tensile_share_dir}," \
+		-i Common.py || die
 
-	sed -e "s|os\.path\.dirname.*$|\"${EPREFIX}/usr/share/Tensile\", end='')|" \
-		-i ${PN}/__init__.py || die
+	sed -e "/scriptDir/s,os.path.realpath(__file__),${Tensile_share_dir}," -i ReplacementKernels.py || die
+
+	sed -e "s,os.path.dirname(os.path.realpath(__file__)),${Tensile_share_dir},g" -i ${PN}.py || die
+
+	sed -e "s|os\.path\.dirname.*$|\"${EPREFIX}/usr/share/Tensile/Source\", end='')|" \
+		-i __init__.py || die
+
+	popd || die
 
 	sed -e "/package_data/d" -e "/data_files/d" -i setup.py || die
-	# echo "include Tensile/Components" >> MANIFEST.in || die
 }
 
 python_install() {
@@ -61,16 +66,17 @@ python_install() {
 
 	python_moduleinto Tensile
 	pushd Tensile
-	python_domodule Components Configs ReplacementKernels ReplacementKernels-cov3 Tests Utilities Perf
+	python_domodule Components # Tests
+	python_newexe Utilities/merge.py ${PN}-merge
+	#exe Utilities 
 }
 
 src_install() {
 	distutils-r1_src_install
 
-	insinto /usr/$(get_libdir)/cmake/${PN}
-	doins "${T}"/cmake/*.cmake
-
+	pushd ${PN} || die
 	insinto /usr/share/${PN}
-	doins -r "${WORKDIR}"/Source/*
-	dosym . /usr/share/${PN}/Source
+	doins -r Configs Perf ReplacementKernels ReplacementKernels-cov3 Source
+	insinto /usr/$(get_libdir)/cmake/${PN}
+	doins cmake/*.cmake
 }
